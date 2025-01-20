@@ -52,6 +52,24 @@ class WebSocketFrame {
     }
 }
 
+class Island {
+    constructor(x, y, radius) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+    }
+
+    draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#7B5B3B';  // Brown color for islands
+        ctx.fill();
+        ctx.strokeStyle = '#5A4229';  // Darker brown for border
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+}
+
 export class MovementData {
     static GRID_SIZE = 250;
     static MAX_GRID_POS = Number.MAX_SAFE_INTEGER;
@@ -63,6 +81,7 @@ export class MovementData {
     static SEND_RATE = 100; // 10 messages per second
     static lastSendTime = 0;
     static sentCount = 0;
+    static islands = [];
     
     constructor(x, y, z, rotation, playerId) {
         // Validate world position
@@ -72,28 +91,10 @@ export class MovementData {
         this.rotation = this.validateNumber(rotation);
         this.playerId = Math.floor(this.validateNumber(playerId));
 
-        // Log position update
-        // console.log('[MovementData] Position update:', {
-        //     x: this.worldX,
-        //     y: this.worldY,
-        //     rotation: this.rotation,
-        //     playerId: this.playerId
-        // });
-
         const now = Date.now();
         if (now - MovementData.lastSendTime >= MovementData.SEND_RATE) {
             MovementData.lastSendTime = now;
             MovementData.sentCount++;
-            
-            console.log('[MovementData] Sending position:', {
-                worldX: this.worldX,
-                worldY: this.worldY,
-                rotation: this.rotation,
-                playerId: this.playerId,
-                timestamp: now,
-                messageCount: MovementData.sentCount,
-                sendRate: Math.round(1000 / (now - MovementData.lastSendTime))
-            });
         }
 
         // Calculate screen transform
@@ -101,6 +102,29 @@ export class MovementData {
         this.screenY = MovementData.VIEW_CENTER.y;
         this.worldOffsetX = -this.worldX;
         this.worldOffsetY = -this.worldY;
+    }
+
+    // Add new method to draw coordinates
+    drawCoordinates(ctx) {
+        if (!ctx) return;
+        
+        // Save current transform
+        ctx.save();
+        
+        // Reset transform for UI elements
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        
+        // Draw coordinate text
+        ctx.font = '14px Arial';
+        ctx.fillStyle = '#000000';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        const text = `X: ${Math.round(this.worldX)} Y: ${Math.round(this.worldY)}`;
+        ctx.fillText(text, 10, 10);
+        
+        // Restore transform
+        ctx.restore();
     }
     
     applyTransform(ctx) {
@@ -189,6 +213,47 @@ export class MovementData {
             ctx.restore();
         } catch (error) {
             console.error('[Grid] Drawing error:', error);
+        }
+    }
+
+    static parseIslandData(buffer) {
+        const view = new DataView(buffer);
+        const messageType = view.getUint8(0);
+        const islandCount = view.getInt32(1, true);
+        const islands = [];
+        
+        console.log('[Islands] Starting to parse', islandCount, 'islands');
+        
+        let offset = 5;  // Skip message type and count
+        for (let i = 0; i < islandCount; i++) {
+            const x = view.getFloat32(offset, true);
+            const y = view.getFloat32(offset + 4, true);
+            const radius = view.getFloat32(offset + 8, true);
+            const island = new Island(x, y, radius);
+            islands.push(island);
+            
+            console.log(`[Islands] Created island ${i + 1}/${islandCount}:`, {
+                x: x.toFixed(2),
+                y: y.toFixed(2),
+                radius: radius.toFixed(2)
+            });
+            
+            offset += 12;  // Each island is 12 bytes (3 floats)
+        }
+        
+        MovementData.islands = islands;
+        console.log('[Islands] Finished parsing all islands');
+    }
+    
+    drawIslands(ctx) {
+        if (!ctx) return;
+        
+        try {
+            this.applyTransform(ctx);
+            MovementData.islands.forEach(island => island.draw(ctx));
+            this.restoreTransform(ctx);
+        } catch (error) {
+            console.error('[Islands] Drawing error:', error);
         }
     }
 }
@@ -312,6 +377,13 @@ export class WebRTCConnection {
 }
 
 export class UDPConnection {
+    static MSG_TYPE_READY = 0;
+    static MSG_TYPE_ISLANDS = 1;
+    static MSG_TYPE_SHIP = 2;  // Add ship message type
+    static MSG_TYPE_SAILS = 3;
+    static MSG_TYPE_CANNONS = 4;
+    static MSG_TYPE_STEERING = 5;
+
     constructor(playerId) {
         this.playerId = playerId;
         this.connected = false;
@@ -319,6 +391,11 @@ export class UDPConnection {
         this.lastSentTime = 0;
         this.messageCount = 0;
         this.initSocket();
+        this.onIslandsReceived = null; // Callback for when islands are received
+        this.onShipReceived = null; // Add callback for ship data
+        this.onSailsReceived = null;
+        this.onCannonsReceived = null;
+        this.onSteeringReceived = null;
     }
 
     initSocket() {
@@ -335,6 +412,61 @@ export class UDPConnection {
                 }));
             };
 
+            this.socket.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    const view = new DataView(event.data);
+                    const messageType = view.getUint8(0);
+                    console.log(messageType);
+                    
+                    switch(messageType) {
+                        case UDPConnection.MSG_TYPE_READY:
+                            this.connected = true;
+                            this.serverReady = true;
+                            this.retryAttempts = 0;
+                            console.log('[UDP] Connection established');
+                            break;
+                            
+                        case UDPConnection.MSG_TYPE_ISLANDS:
+                            const islands = this.parseIslandData(event.data);
+                            if (this.onIslandsReceived) {
+                                this.onIslandsReceived(islands);
+                            }
+                            break;
+                            
+                        case UDPConnection.MSG_TYPE_SHIP:
+                            const shipData = this.parseShipData(event.data);
+                            if (this.onShipReceived) {
+                                this.onShipReceived(shipData);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_SAILS:
+                            const sailsData = this.parseSailsData(event.data);
+                            if (this.onSailsReceived) {
+                                this.onSailsReceived(sailsData);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_CANNONS:
+                            const cannonsData = this.parseCannonsData(event.data);
+                            if (this.onCannonsReceived) {
+                                this.onCannonsReceived(cannonsData);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_STEERING:
+                            const steeringData = this.parseSteeringData(event.data);
+                            if (this.onSteeringReceived) {
+                                this.onSteeringReceived(steeringData);
+                            }
+                            break;
+
+                        default:
+                            console.warn('[UDP] Unknown message type:', messageType);
+                    }
+                }
+            };
+
             this.socket.onclose = () => {
                 this.connected = false;
                 this.serverReady = false;
@@ -348,14 +480,6 @@ export class UDPConnection {
                 console.error('[UDP] Socket error:', error);
             };
 
-            this.socket.onmessage = (event) => {
-                if (event.data === 'READY') {
-                    this.connected = true;
-                    this.serverReady = true;
-                    this.retryAttempts = 0;
-                    console.log('[UDP] Connection established');
-                }
-            };
         } catch (error) {
             console.error('[UDP] Connection failed:', error);
             this.retryConnection();
@@ -443,13 +567,6 @@ export class UDPConnection {
                 
                 this.lastSentTime = now;
                 this.messageCount++;
-                
-                console.log('[UDP] Movement sent:', {
-                    x, y, rotation,
-                    messageCount: this.messageCount,
-                    timestamp: now,
-                    socketState: this.socket.readyState
-                });
             } catch (error) {
                 console.error('[UDP] Send failed:', error);
             }
@@ -467,6 +584,120 @@ export class UDPConnection {
         view.setInt32(16, movement.playerId, true);
         
         return buffer;
+    }
+
+    parseIslandData(buffer) {
+        const view = new DataView(buffer);
+        const islandCount = view.getInt32(1, true); // Skip message type byte
+        const islands = [];
+        
+        let offset = 5; // Skip message type and count
+        for (let i = 0; i < islandCount; i++) {
+            const island = {
+                x: view.getFloat32(offset, true),
+                y: view.getFloat32(offset + 4, true),
+                radius: view.getFloat32(offset + 8, true)
+            };
+            islands.push(island);
+            offset += 12; // Each island is 12 bytes (3 float32s)
+        }
+        
+        return islands;
+    }
+
+    parseShipData(buffer) {
+        const view = new DataView(buffer);
+        const messageType = view.getUint8(0); // First byte is message type
+        
+        // Parse ship_data_t structure starting from byte 1
+        const shipData = {
+            x: view.getFloat32(1, true),          // 4 bytes
+            y: view.getFloat32(5, true),          // 4 bytes
+            rotation: view.getFloat32(9, true),    // 4 bytes
+            sailCount: view.getInt32(13, true),    // 4 bytes
+            cannonCount: view.getInt32(17, true)   // 4 bytes
+        };
+
+        console.log('[UDP] Received ship data:', {
+            messageType,
+            x: shipData.x.toFixed(2),
+            y: shipData.y.toFixed(2),
+            rotation: shipData.rotation.toFixed(2),
+            sails: shipData.sailCount,
+            cannons: shipData.cannonCount
+        });
+
+        return shipData;
+    }
+
+    parseSailsData(buffer) {
+        const view = new DataView(buffer);
+        const count = view.getInt32(1, true);
+        const sails = [];
+        let offset = 5; // Skip type and count
+
+        for (let i = 0; i < count; i++) {
+            const sail = {
+                id: view.getInt32(offset, true),
+                x: view.getFloat32(offset + 4, true),
+                y: view.getFloat32(offset + 8, true),
+                rotation: view.getFloat32(offset + 12, true),
+                efficiency: view.getFloat32(offset + 16, true),
+                attachedToShipId: view.getInt32(offset + 20, true),
+                bindX: view.getFloat32(offset + 24, true),
+                bindY: view.getFloat32(offset + 28, true)
+            };
+            sails.push(sail);
+            offset += 32; // Each sail is 32 bytes
+        }
+
+        return sails;
+    }
+
+    parseCannonsData(buffer) {
+        const view = new DataView(buffer);
+        const count = view.getInt32(1, true);
+        const cannons = [];
+        let offset = 5; // Skip type and count
+
+        console.log('[UDP] Parsing', count, 'cannons');
+        for (let i = 0; i < count; i++) {
+            const cannon = {
+                id: view.getInt32(offset, true),
+                x: view.getFloat32(offset + 4, true),
+                y: view.getFloat32(offset + 8, true),
+                rotation: view.getFloat32(offset + 12, true),
+                efficiency: view.getFloat32(offset + 16, true),
+                attachedToShipId: view.getInt32(offset + 20, true),
+                bindX: view.getFloat32(offset + 24, true),
+                bindY: view.getFloat32(offset + 28, true)
+            };
+            console.log(`[UDP] Cannon ${i + 1}/${count}:`, {
+                id: cannon.id,
+                rotation: cannon.rotation.toFixed(2),
+                bindPos: `(${cannon.bindX.toFixed(2)}, ${cannon.bindY.toFixed(2)})`,
+                raw: new Uint8Array(buffer.slice(offset + 12, offset + 16))
+            });
+            cannons.push(cannon);
+            offset += 32;
+        }
+
+        return cannons;
+    }
+
+    parseSteeringData(buffer) {
+        const view = new DataView(buffer);
+        const steering = {
+            id: view.getInt32(1, true),
+            x: view.getFloat32(5, true),
+            y: view.getFloat32(9, true),
+            rotation: view.getFloat32(13, true),
+            attachedToShipId: view.getInt32(17, true),
+            bindX: view.getFloat32(21, true),
+            bindY: view.getFloat32(25, true)
+        };
+
+        return steering;
     }
 }
 
@@ -530,3 +761,4 @@ export class InputHandler {
         return vector;
     }
 }
+
