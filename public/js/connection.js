@@ -78,7 +78,7 @@ export class MovementData {
         x: window.innerWidth / 2,
         y: window.innerHeight / 2
     };
-    static SEND_RATE = 100; // 10 messages per second
+    static SEND_RATE = 100; // 10 messages per second (every 100ms)
     static lastSendTime = 0;
     static sentCount = 0;
     static islands = [];
@@ -177,40 +177,38 @@ export class MovementData {
         if (!ctx) return;
 
         try {
-            ctx.save();
-            this.applyTransform(ctx);
-            
+            // No need to use applyTransform here as it's called from the game render
             ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 1;
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = 0.3;
             
-            // Calculate visible area (inverted)
-            const screenWidth = window.innerWidth * 2;
-            const screenHeight = window.innerHeight * 2;
             const gridSize = MovementData.GRID_SIZE;
+            const viewWidth = window.innerWidth;
+            const viewHeight = window.innerHeight;
             
-            // Invert grid boundaries calculation
-            const startX = Math.floor((screenWidth/2 + this.worldX) / gridSize) * gridSize;
-            const startY = Math.floor((screenHeight/2 + this.worldY) / gridSize) * gridSize;
-            const endX = Math.ceil((-screenWidth/2 + this.worldX) / gridSize) * gridSize;
-            const endY = Math.ceil((-screenHeight/2 + this.worldY) / gridSize) * gridSize;
+            // Calculate grid boundaries based on view and current position
+            const leftBound = Math.floor((this.worldX - viewWidth) / gridSize) * gridSize;
+            const rightBound = Math.ceil((this.worldX + viewWidth) / gridSize) * gridSize;
+            const topBound = Math.floor((this.worldY - viewHeight) / gridSize) * gridSize;
+            const bottomBound = Math.ceil((this.worldY + viewHeight) / gridSize) * gridSize;
             
-            // Draw vertical lines (reversed)
-            for (let x = endX; x <= startX; x += gridSize) {
+            // Draw vertical lines
+            for (let x = leftBound; x <= rightBound; x += gridSize) {
                 ctx.beginPath();
-                ctx.moveTo(x, endY);
-                ctx.lineTo(x, startY);
+                ctx.moveTo(x, topBound);
+                ctx.lineTo(x, bottomBound);
                 ctx.stroke();
             }
             
-            // Draw horizontal lines (reversed)
-            for (let y = endY; y <= startY; y += gridSize) {
+            // Draw horizontal lines
+            for (let y = topBound; y <= bottomBound; y += gridSize) {
                 ctx.beginPath();
-                ctx.moveTo(endX, y);
-                ctx.lineTo(startX, y);
+                ctx.moveTo(leftBound, y);
+                ctx.lineTo(rightBound, y);
                 ctx.stroke();
             }
             
-            ctx.restore();
+            ctx.globalAlpha = 1.0;
         } catch (error) {
             console.error('[Grid] Drawing error:', error);
         }
@@ -383,6 +381,15 @@ export class UDPConnection {
     static MSG_TYPE_SAILS = 3;
     static MSG_TYPE_CANNONS = 4;
     static MSG_TYPE_STEERING = 5;
+    static MSG_TYPE_MOUNT_REQUEST = 6;
+    static MSG_TYPE_MOUNT_RESPONSE = 7;
+    static MSG_TYPE_CONTROL_INPUT = 8;
+    static MSG_TYPE_FIRE_CANNON = 9;
+    static MSG_TYPE_SELF_POSITION = 10;
+    static MSG_TYPE_OTHER_POSITION = 11;
+    static MSG_TYPE_MOVEMENT = 12;  // Add new message type for client movement
+    static MSG_TYPE_DISCONNECT = 13; // Add new message type for client disconnection
+    static MSG_TYPE_KEEPALIVE = 14; // Add new keepalive message type
 
     constructor(playerId) {
         this.playerId = playerId;
@@ -396,27 +403,197 @@ export class UDPConnection {
         this.onSailsReceived = null;
         this.onCannonsReceived = null;
         this.onSteeringReceived = null;
+        this.onSelfPositionReceived = null;
+        this.onOtherPositionsReceived = null;
+        this.onDisconnectionReceived = null; // Add callback for disconnection
+
+        // Add rotation smoothing properties
+        this.lastRotation = 0;
+        this.targetRotation = 0;
+        this.rotationLerpFactor = 0.3; // Adjust this value to control smoothing (0.1 to 0.3 recommended)
+        this.rotationThreshold = 0.1; // Minimum rotation change to send
+
+        this.maxRetries = 5; // Add max retries limit
+        this.retryAttempts = 0;
+        this.connectionTimeout = null;
+
+        // Add keepalive properties
+        this.lastKeepaliveTime = Date.now();
+        this.keepaliveInterval = 2000; // 2 seconds
+        this.clientTimeout = 10000;    // 10 seconds timeout
+        this.setupKeepaliveTimer();
+
+        // Add network timing properties
+        this.pingHistory = [];
+        this.maxPingHistory = 10;
+        this.averagePing = 0;
+        this.minPing = Infinity;
+        this.maxPing = 0;
+        this.lastPingTime = 0;
+        this.pingInterval = 1000; // Check ping every second
+        this.setupPingChecks();
+    }
+
+    setupKeepaliveTimer() {
+        // Clear any existing timer
+        if (this.keepaliveTimer) {
+            clearInterval(this.keepaliveTimer);
+        }
+
+        // Set up keepalive timer
+        this.keepaliveTimer = setInterval(() => {
+            const now = Date.now();
+            if (now - this.lastKeepaliveTime > this.keepaliveInterval * 2) {
+                console.warn('[UDP] No keepalive received, connection may be stale');
+                this.retryConnection();
+            }
+        }, this.keepaliveInterval);
+    }
+
+    handleKeepalive(data) {
+        try {
+            const now = performance.now();
+            this.lastKeepaliveTime = now;
+            
+            // Send response immediately
+            const response = new ArrayBuffer(5);
+            const view = new DataView(response);
+            view.setUint8(0, UDPConnection.MSG_TYPE_KEEPALIVE);
+            view.setFloat32(1, now, true);
+
+            if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+                this.socket.send(response);
+            }
+        } catch (error) {
+            console.error('[UDP] Keepalive error:', error);
+        }
+    }
+
+    updatePingStats(ping) {
+        this.pingHistory.push(ping);
+        while (this.pingHistory.length > this.maxPingHistory) {
+            this.pingHistory.shift();
+        }
+
+        this.averagePing = this.pingHistory.reduce((a, b) => a + b, 0) / this.pingHistory.length;
+        this.minPing = Math.min(...this.pingHistory);
+        this.maxPing = Math.max(...this.pingHistory);
+
+        console.log('[UDP] Network stats:', {
+            current: Math.round(ping),
+            avg: Math.round(this.averagePing),
+            min: Math.round(this.minPing),
+            max: Math.round(this.maxPing),
+            jitter: Math.round(this.maxPing - this.minPing)
+        });
+    }
+
+    getRecommendedDelay() {
+        if (this.pingHistory.length === 0) return 100; // Default delay
+
+        const jitter = this.maxPing - this.minPing;
+        const baseDelay = this.averagePing * 1.5; // 1.5x average ping
+        const jitterBuffer = jitter * 2; // Add 2x jitter protection
+
+        return Math.min(Math.max(baseDelay + jitterBuffer, 50), 300); // Clamp between 50-300ms
+    }
+
+    updateInterpolationDelay() {
+        const recommendedDelay = this.getRecommendedDelay();
+        if (this.onNetworkStatsUpdate) {
+            this.onNetworkStatsUpdate({
+                averagePing: this.averagePing,
+                jitter: this.maxPing - this.minPing,
+                recommendedDelay
+            });
+        }
+    }
+
+    setupPingChecks() {
+        setInterval(() => {
+            if (this.socket?.readyState === WebSocket.OPEN) {
+                this.lastPingTime = performance.now();
+                const pingBuffer = new ArrayBuffer(5);
+                const view = new DataView(pingBuffer);
+                view.setUint8(0, UDPConnection.MSG_TYPE_KEEPALIVE);
+                view.setFloat32(1, this.lastPingTime, true);
+                this.socket.send(pingBuffer);
+            }
+        }, this.pingInterval);
     }
 
     initSocket() {
         try {
+            if (this.socket) {
+                this.socket.onclose = null; // Remove old handler
+                this.socket.onerror = null;
+                if (this.socket.readyState !== WebSocket.CLOSED) {
+                    this.socket.close();
+                }
+            }
+
+            console.log('[UDP] Initializing socket connection...');
             this.socket = new WebSocket('ws://192.168.8.3:8080');
             this.socket.binaryType = 'arraybuffer';
+            
+            // Add connection timeout
+            if (this.connectionTimeout) {
+                clearTimeout(this.connectionTimeout);
+            }
+            
+            this.connectionTimeout = setTimeout(() => {
+                if (!this.connected) {
+                    console.log('[UDP] Connection timeout, retrying...');
+                    this.retryConnection();
+                }
+            }, 5000);
             
             // Monitor connection state
             this.socket.onopen = () => {
                 console.log('[UDP] Socket opened, sending handshake');
+                clearTimeout(this.connectionTimeout);
+                this.retryAttempts = 0;
+                this.connected = true;
                 this.socket.send(JSON.stringify({
                     type: 'handshake',
                     playerId: this.playerId
                 }));
             };
 
+            this.socket.onclose = (event) => {
+                console.log('[UDP] Socket closed:', event.code, event.reason);
+                this.connected = false;
+                this.serverReady = false;
+                clearTimeout(this.connectionTimeout);
+                if (this.retryAttempts < this.maxRetries) {
+                    this.retryConnection();
+                }
+            };
+
+            this.socket.onerror = (error) => {
+                console.error('[UDP] Socket error:', error);
+                if (this.socket.readyState === WebSocket.CLOSED) {
+                    this.connected = false;
+                    this.serverReady = false;
+                    clearTimeout(this.connectionTimeout);
+                    if (this.retryAttempts < this.maxRetries) {
+                        this.retryConnection();
+                    }
+                }
+            };
+
             this.socket.onmessage = (event) => {
+                if (typeof event.data === 'string' && event.data.includes('handshake')) {
+                    console.log('[UDP] Handshake received');
+                    this.connected = true;
+                    this.serverReady = true;
+                    return;
+                }
+
                 if (event.data instanceof ArrayBuffer) {
                     const view = new DataView(event.data);
                     const messageType = view.getUint8(0);
-                    console.log(messageType);
+                    // console.log(messageType);
                     
                     switch(messageType) {
                         case UDPConnection.MSG_TYPE_READY:
@@ -461,23 +638,43 @@ export class UDPConnection {
                             }
                             break;
 
+                        case UDPConnection.MSG_TYPE_MOUNT_RESPONSE:
+                            const success = view.getInt32(1, true);
+                            const moduleId = view.getInt32(5, true);
+                            console.log('[UDP] Mount response:', { success, moduleId });
+                            if (this.onMountResponse) {
+                                this.onMountResponse(success === 1, moduleId);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_SELF_POSITION:
+                            const selfPos = this.parseSelfPosition(event.data);
+                            if (this.onSelfPositionReceived) {
+                                this.onSelfPositionReceived(selfPos);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_OTHER_POSITION:
+                            const otherPositions = this.parseOtherPositions(event.data);
+                            if (this.onOtherPositionsReceived) {
+                                this.onOtherPositionsReceived(otherPositions);
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_DISCONNECT:
+                            if (this.onDisconnectionReceived) {
+                                this.onDisconnectionReceived();
+                            }
+                            break;
+
+                        case UDPConnection.MSG_TYPE_KEEPALIVE:
+                            this.handleKeepalive(event.data);
+                            break;
+
                         default:
                             console.warn('[UDP] Unknown message type:', messageType);
                     }
                 }
-            };
-
-            this.socket.onclose = () => {
-                this.connected = false;
-                this.serverReady = false;
-                if (this.retryAttempts < this.maxRetries) {
-                    setTimeout(() => this.initSocket(), 1000);
-                    this.retryAttempts++;
-                }
-            };
-
-            this.socket.onerror = (error) => {
-                console.error('[UDP] Socket error:', error);
             };
 
         } catch (error) {
@@ -544,29 +741,57 @@ export class UDPConnection {
     }
 
     retryConnection() {
-        if (this.retryAttempts < this.maxRetries) {
-            this.retryAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, this.retryAttempts), 5000);
-            console.log(`[UDP] Retrying connection ${this.retryAttempts}/${this.maxRetries} in ${delay}ms`);
-            setTimeout(() => this.initSocket(), delay);
+        this.cleanup();
+        if (this.retryAttempts >= this.maxRetries) {
+            console.error('[UDP] Max retry attempts reached');
+            return;
         }
+
+        const delay = Math.min(1000 * Math.pow(2, this.retryAttempts), 5000);
+        console.log(`[UDP] Retrying connection ${this.retryAttempts + 1}/${this.maxRetries} in ${delay}ms`);
+        this.retryAttempts++;
+        
+        setTimeout(() => this.initSocket(), delay);
     }
 
-    sendMovementData(x, y, rotation) {
+    cleanup() {
+        if (this.keepaliveTimer) {
+            clearInterval(this.keepaliveTimer);
+            this.keepaliveTimer = null;
+        }
+        // Add any other cleanup needed
+    }
+
+    sendMovementData(x, y, rotation, timestamp) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            console.warn('[UDP] Socket not ready, queuing movement data');
+            // Optional: Store movement data to send when connection is restored
+            return;
+        }
+
         if (!this.connected || !this.serverReady) {
-            console.warn('[UDP] Not connected or server not ready');
+            console.warn('[UDP] Not connected or server not ready, state:', {
+                connected: this.connected,
+                serverReady: this.serverReady,
+                socketState: this.socket.readyState
+            });
             return;
         }
 
         const now = Date.now();
         if (now - this.lastSentTime >= MovementData.SEND_RATE) {
             try {
-                const movement = new MovementData(x, y, 0, rotation, this.playerId);
-                const buffer = movement.toBuffer();
-                this.socket.send(buffer);
+                const buffer = new ArrayBuffer(17);
+                const view = new DataView(buffer);
                 
+                view.setUint8(0, UDPConnection.MSG_TYPE_MOVEMENT);
+                view.setFloat32(1, x, true);
+                view.setFloat32(5, y, true);
+                view.setFloat32(9, rotation, true);
+                view.setFloat32(13, timestamp || now, true);
+
+                this.socket.send(buffer);
                 this.lastSentTime = now;
-                this.messageCount++;
             } catch (error) {
                 console.error('[UDP] Send failed:', error);
             }
@@ -699,10 +924,162 @@ export class UDPConnection {
 
         return steering;
     }
+
+    parseSelfPosition(buffer) {
+        const view = new DataView(buffer);
+        const bufferSize = buffer.byteLength;
+        
+        // Log buffer info for debugging
+        // console.log('[UDP] Parsing self position:', {
+        //     bufferSize,
+        //     expectedSize: 21,
+        //     messageType: view.getUint8(0)
+        // });
+        
+        // Check buffer size for minimum required bytes (21 bytes)
+        if (bufferSize < 21) {
+            console.error('[UDP] Buffer too small for self position:', bufferSize);
+            return {
+                x: 0,
+                y: 0,
+                z: 0,
+                rotation: 0,
+                mounted: 0,
+                shipId: 0
+            };
+        }
+
+        try {
+            return {
+                x: view.getFloat32(1, true),          // 4 bytes
+                y: view.getFloat32(5, true),          // 4 bytes
+                z: view.getFloat32(9, true),          // 4 bytes
+                rotation: view.getFloat32(13, true),   // 4 bytes
+                mounted: view.getInt32(17, true),      // 4 bytes
+                shipId: bufferSize >= 25 ? view.getInt32(21, true) : 0  // 4 bytes, optional
+            };
+        } catch (error) {
+            console.error('[UDP] Error parsing self position:', error);
+            return {
+                x: 0,
+                y: 0,
+                z: 0,
+                rotation: 0,
+                mounted: 0,
+                shipId: 0
+            };
+        }
+    }
+
+    parseOtherPositions(buffer) {
+        try {
+            const view = new DataView(buffer);
+            const messageType = view.getUint8(0);
+            let offset = 1;
+
+            const clientCount = view.getUint8(offset);
+            offset += 1;
+
+            // Only log when clients are actually present
+            if (clientCount > 0) {
+                console.log(`[UDP] Received positions for ${clientCount} clients`);
+            }
+            
+            const positions = [];
+            for (let i = 0; i < clientCount; i++) {
+                try {
+                    const clientData = {
+                        clientId: view.getUint32(offset, true),
+                        x: view.getFloat32(offset + 4, true),
+                        y: view.getFloat32(offset + 8, true),
+                        rotation: view.getFloat32(offset + 12, true),
+                        mounted: view.getUint8(offset + 16),
+                        shipId: view.getInt32(offset + 20, true)
+                    };
+
+                    // Only add valid positions
+                    if (Number.isFinite(clientData.x) && 
+                        Number.isFinite(clientData.y) && 
+                        Number.isFinite(clientData.rotation)) {
+                        positions.push(clientData);
+                    }
+                } catch (err) {
+                    console.error(`[UDP] Error parsing client ${i}:`, err);
+                }
+
+                offset += 24;
+            }
+
+            return positions;
+        } catch (error) {
+            console.error('[UDP] Failed to parse other positions:', error);
+            return [];
+        }
+    }
+
+    // Update network byte order (big-endian)
+    sendMountRequest(shipId, moduleId) {
+        // Ensure IDs are valid numbers
+        const validModuleId = parseInt(moduleId, 10);
+        if (isNaN(validModuleId)) {
+            console.error('[UDP] Invalid module ID for mount request:', moduleId);
+            return;
+        }
+
+        const buffer = new ArrayBuffer(5);
+        const view = new DataView(buffer);
+        view.setUint8(0, UDPConnection.MSG_TYPE_MOUNT_REQUEST);
+        view.setInt32(1, validModuleId, true); // Use little-endian to match server expectation
+        
+        console.log('[UDP] Sending mount request:', { 
+            moduleId: validModuleId, 
+            raw: new Uint8Array(buffer)
+        });
+        
+        this.socket.send(buffer);
+    }
+
+    sendControlInput(moduleId, sailOpenness = 0, steeringAngle = 0) {
+        const buffer = new ArrayBuffer(13);
+        const view = new DataView(buffer);
+        
+        // Use big-endian (network byte order)
+        view.setUint8(0, UDPConnection.MSG_TYPE_CONTROL_INPUT);
+        view.setFloat32(1, Math.max(0, Math.min(1, sailOpenness)), false);
+        view.setFloat32(5, Math.max(-1, Math.min(1, steeringAngle)), false);
+        view.setInt32(9, moduleId, false);
+        
+        console.log('[UDP] Sending control input:', {
+            moduleId,
+            sailOpenness: sailOpenness.toFixed(2),
+            steeringAngle: steeringAngle.toFixed(2)
+        });
+        this.socket.send(buffer);
+    }
+
+    fireCannon(cannonId, angle) {
+        // Create 9-byte buffer for fire cannon command
+        const buffer = new ArrayBuffer(9);
+        const view = new DataView(buffer);
+        
+        // Set message type (1 byte)
+        view.setUint8(0, UDPConnection.MSG_TYPE_FIRE_CANNON);
+        
+        // Set cannon ID (4 bytes)
+        view.setInt32(1, cannonId, true);
+        
+        // Set firing angle (4 bytes)
+        view.setFloat32(5, angle, true);
+        
+        console.log('[UDP] Sending fire cannon:', { cannonId, angle });
+        this.socket.send(buffer);
+    }
 }
 
 export class InputHandler {
-    static MOVEMENT_SPEED = 5;
+    // Increase base movement speed
+    static MOVEMENT_SPEED = 40;
+    
     static KEYS = {
         UP: new Set(['ArrowUp', 'w', 'W']),
         DOWN: new Set(['ArrowDown', 's', 'S']),
@@ -762,3 +1139,4 @@ export class InputHandler {
     }
 }
 
+//
