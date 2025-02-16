@@ -19,6 +19,102 @@
             font-family: monospace;
             z-index: 1000;
         }
+        #loginForm {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 5px;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .hidden {
+            display: none !important;
+        }
+        #loadingScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            z-index: 1000;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error-message {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 0, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 2000;
+        }
+        #escapeMenu {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 2000;
+            min-width: 200px;
+        }
+
+        #escapeMenu button {
+            padding: 10px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #escapeMenu button:hover {
+            background: #2980b9;
+        }
+
+        .menu-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            z-index: 1999;
+        }
     </style>
     <script>
         // Auto-reload on file changes
@@ -29,9 +125,104 @@
     </script>
 </head>
 <body>
-    <div id="coordinates">X: 0, Y: 0</div>
-    <canvas id="gameCanvas"></canvas>
-    <script type="module" src="/js/gameClient.js"></script>
+    <div id="loginForm">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+        <button onclick="register()">Register</button>
+    </div>
+    <div id="coordinates" class="hidden">X: 0, Y: 0</div>
+    <canvas id="gameCanvas" class="hidden"></canvas>
+    <div id="loadingScreen" class="hidden">
+        <div class="spinner"></div>
+        <div id="loadingText">Connecting to server...</div>
+    </div>
+    <div class="menu-overlay" id="menuOverlay"></div>
+    <div id="escapeMenu">
+        <button id="resumeButton">Resume Game</button>
+        <button id="logoutButton">Logout</button>
+    </div>
+    
+    <!-- Load auth.js first -->
+    <script type="module" src="/js/auth.js"></script>
+    <!-- Then load connection.js which depends on auth.js -->
     <script type="module" src="/js/connection.js"></script>
+    <!-- Finally load gameClient.js which depends on both -->
+    <script type="module" src="/js/gameClient.js"></script>
+    
+    <!-- Keep the auth initialization script -->
+    <script type="module">
+        import { AuthService } from './js/auth.js';
+        
+        const auth = AuthService.getInstance();
+        window.auth = auth;
+        
+        window.login = async () => {
+            try {
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                
+                // Show loading state
+                document.getElementById('loginForm').style.opacity = '0.5';
+                await auth.login(username, password);
+                
+                // Start game immediately after successful login
+                startGame();
+            } catch (error) {
+                showError('Login failed: ' + error.message);
+            } finally {
+                document.getElementById('loginForm').style.opacity = '1';
+            }
+        };
+        
+        window.register = async () => {
+            try {
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                
+                if (!username || !password) {
+                    showError('Username and password are required');
+                    return;
+                }
+
+                // Show loading state
+                document.getElementById('loginForm').style.opacity = '0.5';
+                
+                // Attempt registration
+                const result = await auth.register(username, password);
+                
+                if (result.error) {
+                    showError('Registration failed: ' + result.error);
+                    return;
+                }
+
+                console.log('[Auth] Registration successful, proceeding to game');
+                startGame();
+            } catch (error) {
+                showError('Registration failed: ' + error.message);
+                document.getElementById('loginForm').style.opacity = '1';
+            }
+        };
+        
+        function startGame() {
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('coordinates').classList.remove('hidden');
+            document.getElementById('gameCanvas').classList.remove('hidden');
+            window.dispatchEvent(new Event('startGame'));
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = message;
+            document.body.appendChild(errorDiv);
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+        
+        // Auto-login if token exists
+        if (auth.getToken()) {
+            startGame(); // Start game immediately if token exists
+        }
+    </script>
 </body>
 </html>

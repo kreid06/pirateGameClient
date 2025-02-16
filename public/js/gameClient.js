@@ -27,27 +27,43 @@ const RENDER_LAYERS = {
     GRID: 1,
     ISLANDS: 2,
     SHIPS: 3,
-    PLAYERS: 4,
-    MODULES: 5,
-    UI: 6
+    OTHER_PLAYERS: 4,
+    PLAYERS: 5,
+    MODULES: 6,
+    UI: 7
 };
 
 import { UDPConnection, MovementData } from './connection.js';
+import { AuthService } from './auth.js';
 
-class GameClient {
+export class GameClient {
     static FPS = 60; // Increase to 60 FPS for smoother visuals
     static FRAME_TIME = 1000 / GameClient.FPS; // ~33.33ms per frame
     static UPDATE_RATE = 1000 / 20; // 20 updates per second
 
     constructor() {
         try {
+            this.auth = new AuthService();
+            const playerId = this.auth.getPlayerId();
+            
+            if (!playerId) {
+                throw new Error('No player ID available');
+            }
+            
+            console.log('[GameClient] Initializing with player ID:', playerId);
+            this.playerId = playerId;
+            
+            // Remove random ID generation
+            // Initialize connection with validated player ID
+            this.connection = new UDPConnection(this.playerId, this.auth);
+
+            // Initialize rest of game after auth
             this.canvas = document.getElementById('gameCanvas');
             this.ctx = this.canvas.getContext('2d');
-            this.playerId = Math.floor(Math.random() * 1000);
+            
             this.islands = [];
             
             // Initialize connection with error handling
-            this.connection = new UDPConnection(this.playerId);
             if (!this.connection) {
                 throw new Error('Failed to initialize UDP connection');
             }
@@ -61,17 +77,8 @@ class GameClient {
                 };
 
                 this.connection.onShipReceived = (shipData) => {
-                    if (!shipData) return;
-                    // Convert numeric ID from server to numeric type for consistency
-                    this.handleShipUpdate({
-                        type: 'brigantine',
-                        id: 1, // Use the server's numeric ID instead of 'ship1',
-                        x: shipData.x,
-                        y: shipData.y,
-                        r: shipData.rotation,
-                        sailCount: shipData.sailCount,
-                        cannonCount: shipData.cannonCount
-                    });
+                    console.log('[GameClient] Received ship data:', shipData);
+                    this.handleShipUpdate(shipData);
                 };
             }
 
@@ -131,6 +138,13 @@ class GameClient {
                 console.log('[GameClient] A client has disconnected');
                 // Handle client disconnection logic here
             };
+
+            // Add connection error handler
+            if (this.connection) {
+                this.connection.onConnectionError = (code, message) => {
+                    this.handleConnectionError(code, message);
+                };
+            }
         
             // Initialize world and player state
             this.worldPos = { x: 0, y: 0 };
@@ -156,7 +170,9 @@ class GameClient {
             this.coordsDisplay = document.getElementById('coordinates');
             this.setupMouseTracking();
             this.ships = new Map();
-            this.gameLoop();
+
+            // Start the game loop with proper binding
+            requestAnimationFrame(() => this.gameLoop());
 
             this.focusDisplay = document.createElement('div');
             this.focusDisplay.id = 'focusDisplay';
@@ -416,9 +432,94 @@ class GameClient {
 
             // Add interpolation state for ships
             this.shipStates = new Map();
+
+            this.loadingScreen = document.getElementById('loadingScreen');
+            this.loadingText = document.getElementById('loadingText');
+            this.showLoadingScreen('Connecting to server...');
+            
+            // Add auth state check
+            this.gameReady = false;
+
+            // Add connection state handler
+            if (this.connection) {
+                this.connection.onStateChange = (state, message) => {
+                    this.handleConnectionState(state, message);
+                };
+            }
+
+            // Add auth error handler
+            if (this.connection) {
+                this.connection.onAuthError = (message) => {
+                    this.showError(`Authentication failed: ${message}`);
+                    this.redirectToLogin();
+                };
+            }
+
+            // Add game stop handler
+            this.setupGameStopHandler();
+
+            // Add frame timing and movement smoothing
+            this.frameTiming = {
+                last: performance.now(),
+                delta: 0,
+                actualFPS: 0,
+                targetFPS: 60 // Add target FPS for visibility handling
+            };
+            
+            // Add movement state
+            this.movement = {
+                speed: 200,  // Units per second (reduced from previous value)
+                lastUpdate: performance.now(),
+                smoothing: 0.8
+            };
+
+            // Add escape menu state
+            this.escapeMenuActive = false;
+            this.setupEscapeMenu();
+
+            // Bind game loop to instance
+            this.gameLoop = this.gameLoop.bind(this);
+            
+            // Start the game loop
+            requestAnimationFrame(this.gameLoop);
+
+            // Add game state ready listener
+            window.addEventListener('gameStateReady', (event) => {
+                console.log('[GameClient] Game state ready:', event.detail);
+                this.hideLoadingScreen();
+                this.gameReady = true;
+                
+                // Start game loop only when state is ready
+                this.startGameLoop();
+            });
         } catch (error) {
             console.error('[GameClient] Initialization error:', error);
             throw error; // Re-throw to prevent partial initialization
+        }
+    }
+
+    startGameLoop() {
+        if (!this.gameReady) {
+            console.warn('[GameClient] Attempted to start game loop before ready');
+            return;
+        }
+
+        console.log('[GameClient] Starting game loop');
+        this.lastFrameTime = performance.now();
+        this.gameLoop();
+    }
+
+    handleConnectionError(code, message) {
+        // Show error message to user
+        this.showError(message);
+
+        // Handle "already connected" error specifically
+        if (code === UDPConnection.CONNECTION_ERROR_ALREADY_CONNECTED) {
+            console.log('[GameClient] Account already connected, forcing logout');
+            this.handleLogout();
+        } else {
+            // For other errors, redirect to login
+            this.redirectToLogin();
         }
     }
 
@@ -434,18 +535,18 @@ class GameClient {
     setupVisibilityHandler() {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                this.isTabVisible = false;
-                console.log('[GameClient] Tab hidden, pausing updates');
+                console.log('[GameClient] Tab hidden, reducing update rate');
+                // Don't pause completely, just reduce update rate
+                this.frameTiming.targetFPS = 10; // Reduce to 10 FPS when hidden
             } else {
                 const now = performance.now();
                 const timeDelta = now - this.lastVisibleTime;
                 this.isTabVisible = true;
                 this.lastVisibleTime = now;
                 this.lastFrameTime = now;
-                this.lastUpdateTime = now;
-                this.lastPositionUpdate = Date.now();
-                this.lastPositionLog = Date.now();
-                console.log(`[GameClient] Tab visible, resuming updates after ${Math.round(timeDelta)}ms`);
+                // Reset to full FPS
+                this.frameTiming.targetFPS = 60;
+                console.log(`[GameClient] Tab visible, resuming full updates after ${Math.round(timeDelta)}ms`);
             }
         });
     }
@@ -466,6 +567,13 @@ class GameClient {
 
         window.addEventListener('keyup', (e) => {
             this.keys[e.code] = false;
+        });
+
+        // Add escape key handler
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Escape') {
+                this.toggleEscapeMenu();
+            }
         });
     }
 
@@ -558,6 +666,9 @@ class GameClient {
     }
 
     updateWorldPosition() {
+        // Block movement if not ready
+        if (!this.gameReady) return;
+
         const connection = this.ensureConnection();
         if (!connection) return;
 
@@ -645,9 +756,11 @@ class GameClient {
     }
 
     applyInput(input) {
-        const speed = this.speed * (input.dt / 1000); // Convert to seconds
+        // Ensure we have a valid delta time
+        const deltaSeconds = Math.min(input.dt / 1000, 0.1); // Cap at 100ms to prevent huge jumps
+        const speed = this.movement.speed * deltaSeconds;
 
-        // Calculate movement vector first
+        // Calculate smooth movement vector
         let dx = 0;
         let dy = 0;
 
@@ -668,11 +781,18 @@ class GameClient {
             dy += Math.sin(this.rotation + Math.PI/2) * speed;
         }
 
-        // Apply movement immediately
+        // Normalize diagonal movement
+        if (dx !== 0 && dy !== 0) {
+            const length = Math.sqrt(dx * dx + dy * dy);
+            dx = (dx / length) * speed;
+            dy = (dy / length) * speed;
+        }
+
+        // Apply movement with smoothing
         this.worldPos.x += dx;
         this.worldPos.y += dy;
 
-        // Send update to server immediately if moving
+        // Send update to server if moving
         if (dx !== 0 || dy !== 0) {
             this.connection.sendMovementData(
                 this.worldPos.x,
@@ -759,85 +879,173 @@ class GameClient {
         this.clearRenderQueue();
     }
 
+    renderOtherPlayers(ctx) {
+        const now = performance.now();
+        this.otherPlayers.forEach((player, clientId) => {
+            if (player.clientId === this.playerId) return;
+
+            // Get interpolation data
+            const interpolation = this.otherPlayersInterpolation.get(clientId);
+            if (!interpolation) return;
+
+            // Calculate interpolation factor
+            const timeSinceUpdate = now - interpolation.lastUpdate;
+            const t = Math.min(timeSinceUpdate / this.interpolationConfig.delay, 1);
+
+            // Interpolate position and rotation
+            const pos = {
+                x: lerp(interpolation.previous.x, interpolation.target.x, t),
+                y: lerp(interpolation.previous.y, interpolation.target.y, t),
+                rotation: lerpAngle(interpolation.previous.rotation, interpolation.target.rotation, t)
+            };
+
+            // Draw player
+            ctx.save();
+            ctx.translate(pos.x, pos.y);
+            ctx.rotate(pos.rotation);
+
+            // Draw player triangle
+            ctx.beginPath();
+            ctx.moveTo(20, 0);
+            ctx.lineTo(-10, -10);
+            ctx.lineTo(-10, 10);
+            ctx.closePath();
+
+            // Use different color for mounted players
+            if (player.mounted) {
+                ctx.fillStyle = '#FFA500'; // Orange for mounted players
+            } else {
+                ctx.fillStyle = '#FF0000'; // Red for unmounted players
+            }
+            
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw player ID above the triangle
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Player ${clientId}`, 0, -20);
+
+            ctx.restore();
+        });
+    }
+
     render() {
         const now = performance.now();
         
-        // Clear the entire canvas first
-        this.ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         
-        this.clearRenderQueue();
-
         // Save the original context state
         this.ctx.save();
         
-        // First, translate to center of screen
-        this.ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
+        // Set up the camera transform
+        const cameraTransform = {
+            x: this.canvas.width / 2,  // Center of screen
+            y: this.canvas.height / 2,
+            scale: 1
+        };
         
-        // Then translate based on player position (negative to move world opposite to player)
+        // Apply camera transform
+        this.ctx.translate(cameraTransform.x, cameraTransform.y);
+        this.ctx.scale(cameraTransform.scale, cameraTransform.scale);
+        
+        // Move world relative to player (negative player position)
         this.ctx.translate(-this.worldPos.x, -this.worldPos.y);
 
-        // Queue background (now fill relative to view)
+        // Render game elements through queue system
         this.queueForRendering((ctx) => {
-            const viewWidth = this.canvas.width;
-            const viewHeight = this.canvas.height;
-            ctx.fillStyle = '#87CEEB';
-            ctx.fillRect(-viewWidth/2, -viewHeight/2, viewWidth, viewHeight);
+            // Background
+            const viewWidth = this.canvas.width / cameraTransform.scale;
+            const viewHeight = this.canvas.height / cameraTransform.scale;
+            ctx.fillStyle = '#87CEEB';  // Sky blue
+            ctx.fillRect(
+                this.worldPos.x - viewWidth/2,
+                this.worldPos.y - viewHeight/2,
+                viewWidth,
+                viewHeight
+            );
         }, RENDER_LAYERS.BACKGROUND);
 
-        // Queue grid (already uses centered coordinates)
+        // Grid
         this.queueForRendering((ctx) => {
-            this.drawSmoothGrid(ctx);
+            const gridSize = MovementData.GRID_SIZE;
+            const viewWidth = this.canvas.width / cameraTransform.scale;
+            const viewHeight = this.canvas.height / cameraTransform.scale;
+            
+            // Calculate grid boundaries based on view
+            const leftBound = Math.floor((this.worldPos.x - viewWidth/2) / gridSize) * gridSize;
+            const rightBound = Math.ceil((this.worldPos.x + viewWidth/2) / gridSize) * gridSize;
+            const topBound = Math.floor((this.worldPos.y - viewHeight/2) / gridSize) * gridSize;
+            const bottomBound = Math.ceil((this.worldPos.y + viewHeight/2) / gridSize) * gridSize;
+            
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = 0.3;
+
+            // Draw vertical lines
+            for (let x = leftBound; x <= rightBound; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, topBound);
+                ctx.lineTo(x, bottomBound);
+                ctx.stroke();
+            }
+            
+            // Draw horizontal lines
+            for (let y = topBound; y <= bottomBound; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(leftBound, y);
+                ctx.lineTo(rightBound, y);
+                ctx.stroke();
+            }
+
+            ctx.globalAlpha = 1.0;
+            
+            // Draw player position indicator for debugging
+            ctx.beginPath();
+            ctx.arc(this.worldPos.x, this.worldPos.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#FF0000';
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw direction line
+            const lineLength = 30; // Length of direction line
+            ctx.beginPath();
+            ctx.moveTo(this.worldPos.x, this.worldPos.y);
+            ctx.lineTo(
+                this.worldPos.x + Math.cos(this.rotation) * lineLength,
+                this.worldPos.y + Math.sin(this.rotation) * lineLength
+            );
+            ctx.strokeStyle = '#FFFFFF'; // White direction line
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            
         }, RENDER_LAYERS.GRID);
 
-        // Queue islands
-        this.islands.forEach(island => {
-            this.queueForRendering(island, RENDER_LAYERS.ISLANDS);
+        // Add other players to render queue before player
+        this.queueForRendering((ctx) => this.renderOtherPlayers(ctx), RENDER_LAYERS.OTHER_PLAYERS);
+
+        // Ships
+        this.ships.forEach(ship => {
+            if (ship && typeof ship.render === 'function') {
+                this.queueForRendering(() => ship.render(this.ctx), RENDER_LAYERS.SHIPS);
+            }
         });
 
-        // Queue ships and their modules
-        this.ships.forEach((ship, id) => {
-            const smoothPos = this.getSmoothShipPosition(ship, id);
-            this.queueForRendering(() => {
-                this.renderShip(ship, smoothPos);
-            }, RENDER_LAYERS.SHIPS);
-        });
-
-        // Add interpolation update before rendering other players
-        this.interpolateOtherPlayers(now);
-
-        // Queue other players
-        this.otherPlayers.forEach((player, clientId) => {
-            if (player.clientId === this.playerId) return;
-            this.queueForRendering(() => {
-                this.ctx.save();
-                this.ctx.fillStyle = player.mounted ? '#FF4444' : '#4444FF';
-                this.ctx.translate(player.x, player.y);
-                this.ctx.rotate(player.rotation || 0);
-                
-                this.ctx.beginPath();
-                this.ctx.moveTo(15, 0);
-                this.ctx.lineTo(-10, -10);
-                this.ctx.lineTo(-10, 10);
-                this.ctx.closePath();
-                this.ctx.fill();
-                this.ctx.strokeStyle = '#000000';
-                this.ctx.lineWidth = 2;
-                this.ctx.stroke();
-                
-                this.ctx.restore();
-            }, RENDER_LAYERS.PLAYERS);
-        });
-
-        // Queue current player at world origin
-        this.queueForRendering(() => {
-            this.ctx.save();
-            this.ctx.fillStyle = 'red';
-            this.ctx.translate(this.worldPos.x, this.worldPos.y);
-            this.ctx.rotate(this.rotation);
-            this.ctx.fillRect(-10, -10, 20, 20);
-            this.ctx.restore();
-        }, RENDER_LAYERS.PLAYERS, 1);
+        // Log ship collection state once per frame
+        // console.log('[GameClient] Ships:', {
+        //     count: this.ships.size,
+        //     ships: Array.from(this.ships.entries()).map(([id, ship]) => ({
+        //         id: typeof id === 'bigint' ? id.toString() : id,
+        //         pos: `(${ship.position.x.toFixed(0)}, ${ship.position.y.toFixed(0)})`,
+        //         rot: ship.rotation.toFixed(2)
+        //     }))
+        // });
 
         // Process render queue
         this.processRenderQueue();
@@ -845,175 +1053,99 @@ class GameClient {
         // Restore the original context state
         this.ctx.restore();
         
-        // Draw UI elements (which should be in screen space)
+        // Draw UI elements in screen space
         this.updateCoordinates();
-        this.updateFocusDisplay();
     }
 
-    drawSmoothGrid(ctx) {
-        if (!ctx || !this.gridState.lastUpdate) return;
-
-        const now = performance.now();
-        const alpha = Math.min((now - this.gridState.lastUpdate) / 50, 1); // 50ms = 20Hz
-        const interpolatedPos = this.interpolateState(
-            this.gridState.current,
-            this.gridState.target,
-            alpha
-        );
-
-        try {
-            const gridSize = MovementData.GRID_SIZE;
-            const viewWidth = this.canvas.width;
-            const viewHeight = this.canvas.height;
-            
-            // Use interpolated position for grid offset
-            const gridOffset = {
-                x: Math.floor(interpolatedPos.x / gridSize) * gridSize,
-                y: Math.floor(interpolatedPos.y / gridSize) * gridSize
-            };
-
-            // Calculate visible grid area with buffer
-            const bufferMultiplier = 2; // Add extra grids for smooth scrolling
-            const visibleGrids = {
-                horizontal: Math.ceil(viewWidth / gridSize) * bufferMultiplier,
-                vertical: Math.ceil(viewHeight / gridSize) * bufferMultiplier
-            };
-
-            // Calculate boundaries with buffer
-            const startX = gridOffset.x - (visibleGrids.horizontal * gridSize) / 2;
-            const endX = gridOffset.x + (visibleGrids.horizontal * gridSize) / 2;
-            const startY = gridOffset.y - (visibleGrids.vertical * gridSize) / 2;
-            const endY = gridOffset.y + (visibleGrids.vertical * gridSize) / 2;
-
-            // Draw grid lines with alpha for better visibility
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 0.5;
-            ctx.globalAlpha = 0.3;
-
-            // Draw vertical lines
-            for (let x = startX; x <= endX; x += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, startY);
-                ctx.lineTo(x, endY);
-                ctx.stroke();
-            }
-
-            // Draw horizontal lines
-            for (let y = startY; y <= endY; y += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(startX, y);
-                ctx.lineTo(endX, y);
-                ctx.stroke();
-            }
-
-            ctx.globalAlpha = 1.0;
-        } catch (error) {
-            console.error('[Grid] Drawing error:', error);
-        }
-    }
-
-    getSmoothShipPosition(ship, id) {
-        // Initialize ship position tracking if needed
-        if (!this.visualSmoothing.shipPositions.has(id)) {
-            this.visualSmoothing.shipPositions.set(id, {
-                position: { x: ship.position.x, y: ship.position.y },
-                rotation: ship.rotation,
-                lastUpdate: performance.now()
-            });
-        }
-
-        const smoothData = this.visualSmoothing.shipPositions.get(id);
-        const now = performance.now();
-        const dt = now - smoothData.lastUpdate;
-
-        // Smoothly interpolate position and rotation
-        const smoothPos = {
-            x: lerp(smoothData.position.x, ship.position.x, this.visualSmoothing.factor),
-            y: lerp(smoothData.position.y, ship.position.y, this.visualSmoothing.factor),
-            rotation: lerpAngle(smoothData.rotation, ship.rotation, this.visualSmoothing.factor)
-        };
-
-        // Update stored position
-        smoothData.position = { ...smoothPos };
-        smoothData.rotation = smoothPos.rotation;
-        smoothData.lastUpdate = now;
-
-        return smoothPos;
-    }
-
-    gameLoop(timestamp) {
-        // Skip updates if tab is hidden
-        if (!this.isTabVisible) {
-            requestAnimationFrame((ts) => this.gameLoop(ts));
+    // Update the game loop to ensure movement updates are happening
+    gameLoop() {
+        if (!this.gameReady) {
+            console.log('[GameClient] Game loop stopping - not ready');
             return;
         }
 
-        const delta = timestamp - this.lastFrameTime;
+        const now = performance.now();
+        const frameInterval = 1000 / this.frameTiming.targetFPS;
         
-        if (delta >= GameClient.FRAME_TIME) {
-            this.lastFrameTime = timestamp - (delta % GameClient.FRAME_TIME);
+        // Only update if enough time has passed or tab is visible
+        if (now - this.frameTiming.last >= frameInterval) {
+            this.frameTiming.delta = now - this.frameTiming.last;
+            this.frameTiming.last = now;
             
-            // Regular position updates (20Hz)
-            const now = Date.now();
-            if (now - this.lastPositionUpdate >= this.updateRate) {
+            // Update world state
+            if (!this.paused) {
                 this.updateWorldPosition();
-                this.lastPositionUpdate = now;
+                this.render();
             }
-
-            // Periodic position logging
-            if (now - this.lastPositionLog >= this.positionLogInterval) {
-                this.logOtherPlayersPositions();
-                this.lastPositionLog = now;
-            }
-
-            // Module control updates
-            this.updateModuleControl();
-            
-            // Render with interpolation every frame
-            this.render();
-        }
-
-        // Add client cleanup check
-        const now = Date.now();
-        if (now - this.clientTracking.lastCleanup >= this.clientTracking.cleanupInterval) {
-            this.clientTracking.lastCleanup = now;
-            
-            // Log active clients
-            console.log('[GameClient] Active clients:', 
-                Array.from(this.otherPlayers.keys()).join(', ') || 'None');
         }
         
-        requestAnimationFrame((ts) => this.gameLoop(ts));
+        requestAnimationFrame(() => this.gameLoop());
     }
 
     handleShipUpdate(shipData) {
-        const { id, type, x, y, r } = shipData;
-        console.log('[GameClient] Handling ship update:', { id, type, x, y, r });
-        
-        let ship = this.ships.get(id);
-        
-        if (!ship) {
-            switch (type) {
-                case 'brigantine':
-                    ship = new Brigantine(x, y, r, id);
-                    this.ships.set(id, ship);
-                    console.log(`[GameClient] Created new ship ${id}, checking for ${this.pendingModules.has(id) ? 'pending' : 'no'} modules`);
-                    
-                    // Process any pending modules for this ship
-                    if (this.pendingModules.has(id)) {
-                        const pendingCount = this.pendingModules.get(id).length;
-                        console.log(`[GameClient] Processing ${pendingCount} pending modules for ship ${id}`);
-                        this.pendingModules.get(id).forEach(module => {
-                            ship.addModule(module);
-                        });
-                        this.pendingModules.delete(id);
-                    }
-                    break;
-            }
+        if (!shipData) {
+            console.error('[GameClient] Ship update received null data');
+            return;
         }
-        
-        if (ship) {
-            ship.serverUpdate(shipData);
+
+        try {
+            const { id, type, x, y, r } = shipData;
+            
+            if (typeof id === 'undefined') {
+                throw new Error('Ship data missing ID');
+            }
+
+            // Convert BigInt to string for Map key if needed
+            const shipId = typeof id === 'bigint' ? id.toString() : id;
+            let ship = this.ships.get(shipId);
+
+            console.log('[GameClient] Ship collection update:', {
+                stage: 'pre-update',
+                shipId: shipId,
+                exists: !!ship,
+                collectionSize: this.ships.size
+            });
+
+            if (!ship) {
+                ship = new Brigantine(x, y, r || 0, shipId);
+                const success = this.ships.set(shipId, ship);
+                
+                console.log('[GameClient] New ship added:', {
+                    success: !!success,
+                    shipId: shipId,
+                    position: `(${x.toFixed(2)}, ${y.toFixed(2)})`,
+                    rotation: (r || 0).toFixed(2),
+                    newCollectionSize: this.ships.size
+                });
+            }
+
+            // Update ship state
+            ship.position.x = x;
+            ship.position.y = y;
+            ship.rotation = r || 0;
+
+            // Verify the update
+            const updatedShip = this.ships.get(shipId);
+            if (!updatedShip) {
+                throw new Error(`Ship ${shipId} not found after update`);
+            }
+
+            // Log final state
+            console.log('[GameClient] Ship collection state:', {
+                totalShips: this.ships.size,
+                updatedShip: {
+                    id: shipId,
+                    pos: `(${updatedShip.position.x.toFixed(2)}, ${updatedShip.position.y.toFixed(2)})`,
+                    rot: updatedShip.rotation.toFixed(2)
+                }
+            });
+
+        } catch (error) {
+            console.error('[GameClient] Ship update failed:', {
+                error: error.message,
+                shipData,
+                collectionSize: this.ships.size
+            });
         }
     }
 
@@ -1040,32 +1172,11 @@ class GameClient {
         });
     }
 
-    logOtherPlayersPositions() {
-        if (this.otherPlayers.size === 0) return;
-
-        const now = Date.now();
-        console.log('[GameClient] Current player positions:');
-        this.otherPlayers.forEach((player, id) => {
-            // Ensure lastUpdate is valid before converting to ISO string
-            const lastUpdateStr = player.lastUpdate && isFinite(player.lastUpdate) 
-                ? new Date(player.lastUpdate).toISOString() 
-                : 'Invalid timestamp';
-
-            console.log(`Player ${id}:`, {
-                position: `(${player.x.toFixed(2)}, ${player.y.toFixed(2)})`,
-                rotation: `${(player.rotation * 180 / Math.PI).toFixed(2)}°`,
-                mounted: player.mounted ? `Ship ${player.shipId}` : 'No',
-                lastUpdate: lastUpdateStr
-            });
-        });
-    }
-
     handleOtherPositions(positions) {
         const now = performance.now();
         
         positions.forEach(data => {
             if (data.clientId === this.playerId) return;
-            
             if (!this.validatePlayerData(data)) return;
 
             // Initialize or get player's interpolation data
@@ -1116,9 +1227,9 @@ class GameClient {
             }
         }
 
-        // Log current player count only if there are players
-        if (this.otherPlayers.size > 0) {
-            console.log(`[GameClient] Active players: ${this.otherPlayers.size}`);
+        // Force immediate render update when receiving position updates
+        if (!this.paused) {
+            this.render();
         }
     }
 
@@ -1208,8 +1319,8 @@ class GameClient {
         
         ship.modules.forEach(module => {
             if (module instanceof Sail) {
-                ship.drawSailFibers(this.ctx, module);
-                ship.drawSailMast(this.ctx, module);
+                this.drawSailFibers(this.ctx, module);
+                this.drawSailMast(this.ctx, module);
             }
         });
         
@@ -1248,6 +1359,212 @@ class GameClient {
             y: lerp(current.y, target.y, alpha),
             rotation: lerpAngle(current.rotation || 0, target.rotation || 0, alpha)
         };
+    }
+
+    showLoadingScreen(message) {
+        this.loadingScreen.classList.remove('hidden');
+        this.loadingText.textContent = message;
+    }
+
+    hideLoadingScreen() {
+        this.loadingScreen.classList.add('hidden');
+    }
+
+    handleConnectionState(state, message) {
+        // Only handle state changes if they're different from current state
+        if (this.currentState === state) return;
+        
+        this.currentState = state;
+        
+        switch (state) {
+            case 'HANDSHAKE':
+                this.showLoadingScreen('Establishing connection...');
+                this.gameReady = false;
+                break;
+            case 'AUTH_REQUIRED':
+                this.showLoadingScreen('Authenticating...');
+                this.gameReady = false;
+                break;
+            case 'AUTHENTICATED':
+                this.showLoadingScreen('Authorization successful...');
+                this.gameReady = false;
+                break;
+            case 'READY':
+                this.hideLoadingScreen();
+                this.gameReady = true;
+                break;
+            case 'ERROR':
+                this.showError(message);
+                this.redirectToLogin();
+                break;
+            default:
+                this.showLoadingScreen('Connecting...');
+                this.gameReady = false;
+        }
+    }
+
+    showError(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-message';
+        errorDiv.textContent = message;
+        document.body.appendChild(errorDiv);
+        setTimeout(() => errorDiv.remove(), 5000);
+    }
+
+    redirectToLogin() {
+        this.auth.clearSession();
+        document.getElementById('loginForm').classList.remove('hidden');
+        document.getElementById('gameCanvas').classList.add('hidden');
+        document.getElementById('coordinates').classList.add('hidden');
+        document.getElementById('loadingScreen').classList.add('hidden');
+    }
+
+    setupGameStopHandler() {
+        window.addEventListener('stopGame', (event) => {
+            console.log('[GameClient] Stopping game:', event.detail?.reason);
+            
+            // Stop game loop
+            this.gameReady = false;
+            
+            // Clear game state
+            this.ships.clear();
+            this.otherPlayers.clear();
+            this.islands = [];
+            
+            // Hide game elements
+            document.getElementById('gameCanvas').classList.add('hidden');
+            document.getElementById('coordinates').classList.add('hidden');
+            document.getElementById('loadingScreen').classList.add('hidden');
+            
+            // Show login form
+            document.getElementById('loginForm').classList.remove('hidden');
+            
+            // Remove focus display if exists
+            if (this.focusDisplay) {
+                this.focusDisplay.remove();
+                this.focusDisplay = null;
+            }
+            
+            // Show error message
+            this.showError(event.detail?.reason || 'Game stopped unexpectedly');
+            
+            // Clear any remaining timeouts/intervals
+            if (this.gameLoop) {
+                cancelAnimationFrame(this.gameLoop);
+                this.gameLoop = null;
+            }
+        });
+    }
+
+    setupEscapeMenu() {
+        const escapeMenu = document.getElementById('escapeMenu');
+        const menuOverlay = document.getElementById('menuOverlay');
+        const resumeButton = document.getElementById('resumeButton');
+        const logoutButton = document.getElementById('logoutButton');
+
+        resumeButton.addEventListener('click', () => {
+            this.toggleEscapeMenu();
+        });
+
+        logoutButton.addEventListener('click', () => {
+            this.handleLogout();
+        });
+
+        // Close menu if clicking outside
+        menuOverlay.addEventListener('click', () => {
+            this.toggleEscapeMenu();
+        });
+    }
+
+    toggleEscapeMenu() {
+        const escapeMenu = document.getElementById('escapeMenu');
+        const menuOverlay = document.getElementById('menuOverlay');
+        this.escapeMenuActive = !this.escapeMenuActive;
+
+        if (this.escapeMenuActive) {
+            escapeMenu.style.display = 'flex';
+            menuOverlay.style.display = 'block';
+            // Optionally pause game logic here
+            this.pauseGame();
+        } else {
+            escapeMenu.style.display = 'none';
+            menuOverlay.style.display = 'none';
+            // Resume game logic
+            this.resumeGame();
+        }
+    }
+
+    pauseGame() {
+        // Disable input processing while menu is open
+        this.paused = true;
+        // You might want to show a visual indicator that the game is paused
+        console.log('[GameClient] Game paused');
+    }
+
+    resumeGame() {
+        // Re-enable input processing
+        this.paused = false;
+        console.log('[GameClient] Game resumed');
+    }
+
+    cleanup() {
+        // Stop game loop
+        this.gameReady = false;
+        
+        // Clear game state
+        this.ships.clear();
+        this.otherPlayers.clear();
+        this.islands = [];
+        
+        // Clear input state
+        this.keys = {};
+        
+        // Clear any timers/intervals
+        if (this.gameLoop) {
+            cancelAnimationFrame(this.gameLoop);
+            this.gameLoop = null;
+        }
+        
+        // Clear WebSocket connection
+        if (this.connection) {
+            this.connection.cleanup();
+            this.connection = null;
+        }
+
+        // Clear canvas
+        if (this.ctx && this.canvas) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+
+        // Reset state variables
+        this.worldPos = { x: 0, y: 0 };
+        this.rotation = 0;
+        this.selectedModule = null;
+        this.mountedModule = null;
+        this.currentFocus = null;
+
+        console.log('[GameClient] Cleanup complete');
+    }
+
+    handleLogout() {
+        // Clean up game state
+        this.cleanup();
+        
+        // Clear auth session
+        if (this.auth) {
+            this.auth.clearSession();
+        }
+        
+        // Hide game elements
+        document.getElementById('gameCanvas').classList.add('hidden');
+        document.getElementById('coordinates').classList.add('hidden');
+        document.getElementById('escapeMenu').style.display = 'none';
+        document.getElementById('menuOverlay').style.display = 'none';
+        
+        // Show login form
+        document.getElementById('loginForm').classList.remove('hidden');
+        
+        console.log('[GameClient] Logged out');
     }
 }
 
@@ -1570,4 +1887,29 @@ class Sail extends ShipComponent {
     }
 }
 
-window.onload = () => new GameClient();
+window.onload = () => {
+    window.addEventListener('startGame', async () => {
+        try {
+            const auth = new AuthService();
+            const token = auth.getToken();
+            
+            if (token) {
+                // Remove token verification and create game client directly
+                new GameClient();
+            } else {
+                console.error('[GameClient] No auth token available');
+                document.getElementById('loginForm').classList.remove('hidden');
+                document.getElementById('gameCanvas').classList.add('hidden');
+                document.getElementById('coordinates').classList.add('hidden');
+            }
+        } catch (error) {
+            console.error('[GameClient] Start error:', error);
+        }
+    });
+
+    // Check if we can auto-start
+    const auth = new AuthService();
+    if (auth.getToken()) {
+        window.dispatchEvent(new Event('startGame'));
+    }
+};

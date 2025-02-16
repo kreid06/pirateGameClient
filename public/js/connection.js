@@ -1,5 +1,7 @@
 //connection.js
 
+import { AuthService } from './auth.js';
+
 class WebSocketFrame {
     static createBinaryFrame(data) {
         const payload = new Uint8Array(data);
@@ -78,7 +80,7 @@ export class MovementData {
         x: window.innerWidth / 2,
         y: window.innerHeight / 2
     };
-    static SEND_RATE = 100; // 10 messages per second (every 100ms)
+    static SEND_RATE = 50; // Increase to 20 updates per second (50ms)
     static lastSendTime = 0;
     static sentCount = 0;
     static islands = [];
@@ -254,828 +256,773 @@ export class MovementData {
             console.error('[Islands] Drawing error:', error);
         }
     }
+
+    static updateViewCenter() {
+        MovementData.VIEW_CENTER = {
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2
+        };
+    }
 }
 
-export class WebRTCConnection {
-    constructor(playerId) {
-        this.playerId = playerId;
-        this.peerConnection = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
-        this.signaling = new WebSocket('ws://192.168.8.3:8080');
-        this.setupSignalingHandlers();
-        this.setupPeerConnection();
-    }
-
-    setupSignalingHandlers() {
-        this.signaling.onopen = async () => {
-            console.log('[WebRTC] Signaling connected');
-            const offer = await this.peerConnection.createOffer();
-            await this.peerConnection.setLocalDescription(offer);
-            const offerMessage = JSON.stringify({
-                type: 'offer',
-                sdp: offer
-            });
-            console.log('[WebRTC] Sending offer');
-            this.signaling.send(offerMessage);
-        };
-
-        this.signaling.onmessage = async (event) => {
-            try {
-                let messageData;
-                if (event.data instanceof Blob) {
-                    messageData = await new Response(event.data).text();
-                } else {
-                    messageData = event.data;
-                }
-                
-                console.log('[WebRTC] Received message:', messageData);
-                
-                const message = JSON.parse(messageData);
-                
-                if (message.type === 'answer') {
-                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(message));
-                    console.log('[WebRTC] Remote description set');
-                } else if (message.candidate) {
-                    await this.peerConnection.addIceCandidate(new RTCIceCandidate(message));
-                    console.log('[WebRTC] ICE candidate added');
-                }
-            } catch (error) {
-                console.error('[WebRTC] Message handling error:', error);
-            }
-        };
-    }
-
-    async handleSignalingMessage(data) {
-        try {
-            const message = JSON.parse(data);
-            console.log('[WebRTC] Parsed message:', message);
-
-            if (message.type === 'answer') {
-                await this.peerConnection.setRemoteDescription(new RTCSessionDescription(message));
-                console.log('[WebRTC] Remote description set');
-            } else if (message.candidate) {
-                await this.peerConnection.addIceCandidate(new RTCIceCandidate(message));
-                console.log('[WebRTC] ICE candidate added');
-            }
-        } catch (error) {
-            console.error('[WebRTC] Message handling error:', error);
-            console.log('[WebRTC] Raw message:', data);
-        }
-    }
-
-    setupPeerConnection() {
-        this.peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-                this.signaling.send(JSON.stringify(event.candidate));
-            }
-        };
-
-        this.movementChannel = this.peerConnection.createDataChannel('movement', {
-            ordered: false,
-            maxRetransmits: 0
-        });
-
-        this.movementChannel.onopen = () => {
-            console.log('[WebRTC] Movement channel opened - Ready for data');
-            this.isConnected = true;
-            this.sendPendingMovements();
-        };
-
-        this.peerConnection.ondatachannel = (event) => {
-            console.log('[WebRTC] Received remote data channel');
-            const channel = event.channel;
-            channel.onmessage = (e) => console.log('[WebRTC] Received:', e.data);
-        };
-    }
-
-    sendMovementData(data) {
-        if (!this.isConnected) {
-            this.pendingMovements.push(data);
-            console.log('[WebRTC] Movement queued, waiting for connection');
-            return;
-        }
-
-        try {
-            const buffer = data.toBuffer();
-            this.movementChannel.send(buffer);
-            console.log('[WebRTC] Movement sent:', data);
-        } catch (error) {
-            console.error('[WebRTC] Send failed:', error);
-            this.pendingMovements.push(data);
-        }
-    }
-
-    sendPendingMovements() {
-        while (this.pendingMovements.length > 0) {
-            const data = this.pendingMovements.shift();
-            this.sendMovementData(data);
-        }
-    }
-}
+// Add window resize handler
+window.addEventListener('resize', () => {
+    MovementData.updateViewCenter();
+});
 
 export class UDPConnection {
-    static MSG_TYPE_READY = 0;
-    static MSG_TYPE_ISLANDS = 1;
-    static MSG_TYPE_SHIP = 2;  // Add ship message type
-    static MSG_TYPE_SAILS = 3;
-    static MSG_TYPE_CANNONS = 4;
-    static MSG_TYPE_STEERING = 5;
-    static MSG_TYPE_MOUNT_REQUEST = 6;
-    static MSG_TYPE_MOUNT_RESPONSE = 7;
-    static MSG_TYPE_CONTROL_INPUT = 8;
-    static MSG_TYPE_FIRE_CANNON = 9;
-    static MSG_TYPE_SELF_POSITION = 10;
-    static MSG_TYPE_OTHER_POSITION = 11;
-    static MSG_TYPE_MOVEMENT = 12;  // Add new message type for client movement
-    static MSG_TYPE_DISCONNECT = 13; // Add new message type for client disconnection
-    static MSG_TYPE_KEEPALIVE = 14; // Add new keepalive message type
-
-    constructor(playerId) {
-        this.playerId = playerId;
-        this.connected = false;
-        this.serverReady = false;
-        this.lastSentTime = 0;
-        this.messageCount = 0;
-        this.initSocket();
-        this.onIslandsReceived = null; // Callback for when islands are received
-        this.onShipReceived = null; // Add callback for ship data
-        this.onSailsReceived = null;
-        this.onCannonsReceived = null;
-        this.onSteeringReceived = null;
-        this.onSelfPositionReceived = null;
-        this.onOtherPositionsReceived = null;
-        this.onDisconnectionReceived = null; // Add callback for disconnection
-
-        // Add rotation smoothing properties
-        this.lastRotation = 0;
-        this.targetRotation = 0;
-        this.rotationLerpFactor = 0.3; // Adjust this value to control smoothing (0.1 to 0.3 recommended)
-        this.rotationThreshold = 0.1; // Minimum rotation change to send
-
-        this.maxRetries = 5; // Add max retries limit
-        this.retryAttempts = 0;
-        this.connectionTimeout = null;
-
-        // Add keepalive properties
-        this.lastKeepaliveTime = Date.now();
-        this.keepaliveInterval = 2000; // 2 seconds
-        this.clientTimeout = 10000;    // 10 seconds timeout
-        this.setupKeepaliveTimer();
-
-        // Add network timing properties
-        this.pingHistory = [];
-        this.maxPingHistory = 10;
-        this.averagePing = 0;
-        this.minPing = Infinity;
-        this.maxPing = 0;
-        this.lastPingTime = 0;
-        this.pingInterval = 1000; // Check ping every second
-        this.setupPingChecks();
-    }
-
-    setupKeepaliveTimer() {
-        // Clear any existing timer
-        if (this.keepaliveTimer) {
-            clearInterval(this.keepaliveTimer);
-        }
-
-        // Set up keepalive timer
-        this.keepaliveTimer = setInterval(() => {
-            const now = Date.now();
-            if (now - this.lastKeepaliveTime > this.keepaliveInterval * 2) {
-                console.warn('[UDP] No keepalive received, connection may be stale');
-                this.retryConnection();
-            }
-        }, this.keepaliveInterval);
-    }
-
-    handleKeepalive(data) {
-        try {
-            const now = performance.now();
-            this.lastKeepaliveTime = now;
-            
-            // Send response immediately
-            const response = new ArrayBuffer(5);
-            const view = new DataView(response);
-            view.setUint8(0, UDPConnection.MSG_TYPE_KEEPALIVE);
-            view.setFloat32(1, now, true);
-
-            if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-                this.socket.send(response);
-            }
-        } catch (error) {
-            console.error('[UDP] Keepalive error:', error);
-        }
-    }
-
-    updatePingStats(ping) {
-        this.pingHistory.push(ping);
-        while (this.pingHistory.length > this.maxPingHistory) {
-            this.pingHistory.shift();
-        }
-
-        this.averagePing = this.pingHistory.reduce((a, b) => a + b, 0) / this.pingHistory.length;
-        this.minPing = Math.min(...this.pingHistory);
-        this.maxPing = Math.max(...this.pingHistory);
-
-        console.log('[UDP] Network stats:', {
-            current: Math.round(ping),
-            avg: Math.round(this.averagePing),
-            min: Math.round(this.minPing),
-            max: Math.round(this.maxPing),
-            jitter: Math.round(this.maxPing - this.minPing)
-        });
-    }
-
-    getRecommendedDelay() {
-        if (this.pingHistory.length === 0) return 100; // Default delay
-
-        const jitter = this.maxPing - this.minPing;
-        const baseDelay = this.averagePing * 1.5; // 1.5x average ping
-        const jitterBuffer = jitter * 2; // Add 2x jitter protection
-
-        return Math.min(Math.max(baseDelay + jitterBuffer, 50), 300); // Clamp between 50-300ms
-    }
-
-    updateInterpolationDelay() {
-        const recommendedDelay = this.getRecommendedDelay();
-        if (this.onNetworkStatsUpdate) {
-            this.onNetworkStatsUpdate({
-                averagePing: this.averagePing,
-                jitter: this.maxPing - this.minPing,
-                recommendedDelay
-            });
-        }
-    }
-
-    setupPingChecks() {
-        setInterval(() => {
-            if (this.socket?.readyState === WebSocket.OPEN) {
-                this.lastPingTime = performance.now();
-                const pingBuffer = new ArrayBuffer(5);
-                const view = new DataView(pingBuffer);
-                view.setUint8(0, UDPConnection.MSG_TYPE_KEEPALIVE);
-                view.setFloat32(1, this.lastPingTime, true);
-                this.socket.send(pingBuffer);
-            }
-        }, this.pingInterval);
-    }
-
-    initSocket() {
-        try {
-            if (this.socket) {
-                this.socket.onclose = null; // Remove old handler
-                this.socket.onerror = null;
-                if (this.socket.readyState !== WebSocket.CLOSED) {
-                    this.socket.close();
-                }
-            }
-
-            console.log('[UDP] Initializing socket connection...');
-            this.socket = new WebSocket('ws://192.168.8.3:8080');
-            this.socket.binaryType = 'arraybuffer';
-            
-            // Add connection timeout
-            if (this.connectionTimeout) {
-                clearTimeout(this.connectionTimeout);
-            }
-            
-            this.connectionTimeout = setTimeout(() => {
-                if (!this.connected) {
-                    console.log('[UDP] Connection timeout, retrying...');
-                    this.retryConnection();
-                }
-            }, 5000);
-            
-            // Monitor connection state
-            this.socket.onopen = () => {
-                console.log('[UDP] Socket opened, sending handshake');
-                clearTimeout(this.connectionTimeout);
-                this.retryAttempts = 0;
-                this.connected = true;
-                this.socket.send(JSON.stringify({
-                    type: 'handshake',
-                    playerId: this.playerId
-                }));
-            };
-
-            this.socket.onclose = (event) => {
-                console.log('[UDP] Socket closed:', event.code, event.reason);
-                this.connected = false;
-                this.serverReady = false;
-                clearTimeout(this.connectionTimeout);
-                if (this.retryAttempts < this.maxRetries) {
-                    this.retryConnection();
-                }
-            };
-
-            this.socket.onerror = (error) => {
-                console.error('[UDP] Socket error:', error);
-                if (this.socket.readyState === WebSocket.CLOSED) {
-                    this.connected = false;
-                    this.serverReady = false;
-                    clearTimeout(this.connectionTimeout);
-                    if (this.retryAttempts < this.maxRetries) {
-                        this.retryConnection();
-                    }
-                }
-            };
-
-            this.socket.onmessage = (event) => {
-                if (typeof event.data === 'string' && event.data.includes('handshake')) {
-                    console.log('[UDP] Handshake received');
-                    this.connected = true;
-                    this.serverReady = true;
-                    return;
-                }
-
-                if (event.data instanceof ArrayBuffer) {
-                    const view = new DataView(event.data);
-                    const messageType = view.getUint8(0);
-                    // console.log(messageType);
-                    
-                    switch(messageType) {
-                        case UDPConnection.MSG_TYPE_READY:
-                            this.connected = true;
-                            this.serverReady = true;
-                            this.retryAttempts = 0;
-                            console.log('[UDP] Connection established');
-                            break;
-                            
-                        case UDPConnection.MSG_TYPE_ISLANDS:
-                            const islands = this.parseIslandData(event.data);
-                            if (this.onIslandsReceived) {
-                                this.onIslandsReceived(islands);
-                            }
-                            break;
-                            
-                        case UDPConnection.MSG_TYPE_SHIP:
-                            const shipData = this.parseShipData(event.data);
-                            if (this.onShipReceived) {
-                                this.onShipReceived(shipData);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_SAILS:
-                            const sailsData = this.parseSailsData(event.data);
-                            if (this.onSailsReceived) {
-                                this.onSailsReceived(sailsData);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_CANNONS:
-                            const cannonsData = this.parseCannonsData(event.data);
-                            if (this.onCannonsReceived) {
-                                this.onCannonsReceived(cannonsData);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_STEERING:
-                            const steeringData = this.parseSteeringData(event.data);
-                            if (this.onSteeringReceived) {
-                                this.onSteeringReceived(steeringData);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_MOUNT_RESPONSE:
-                            const success = view.getInt32(1, true);
-                            const moduleId = view.getInt32(5, true);
-                            console.log('[UDP] Mount response:', { success, moduleId });
-                            if (this.onMountResponse) {
-                                this.onMountResponse(success === 1, moduleId);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_SELF_POSITION:
-                            const selfPos = this.parseSelfPosition(event.data);
-                            if (this.onSelfPositionReceived) {
-                                this.onSelfPositionReceived(selfPos);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_OTHER_POSITION:
-                            const otherPositions = this.parseOtherPositions(event.data);
-                            if (this.onOtherPositionsReceived) {
-                                this.onOtherPositionsReceived(otherPositions);
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_DISCONNECT:
-                            if (this.onDisconnectionReceived) {
-                                this.onDisconnectionReceived();
-                            }
-                            break;
-
-                        case UDPConnection.MSG_TYPE_KEEPALIVE:
-                            this.handleKeepalive(event.data);
-                            break;
-
-                        default:
-                            console.warn('[UDP] Unknown message type:', messageType);
-                    }
-                }
-            };
-
-        } catch (error) {
-            console.error('[UDP] Connection failed:', error);
-            this.retryConnection();
-        }
-    }
-
-    setupSocket() {
-        try {
-            // Use correct WebSocket upgrade headers
-            const wsUrl = 'ws://192.168.8.3:8080';
-            this.socket = new WebSocket(wsUrl);
-            this.socket.binaryType = 'arraybuffer';
-            
-            // Add custom headers through URL params
-            const headers = {
-                'Upgrade': 'websocket',
-                'Connection': 'Upgrade',
-                'Sec-WebSocket-Version': '13',
-                'Sec-WebSocket-Protocol': 'binary'
-            };
-
-            this.setupSocketHandlers();
-            console.log('[UDP] Attempting connection with headers:', headers);
-        } catch (error) {
-            console.error('[UDP] Socket creation failed:', error);
-            this.retryConnection();
-        }
-    }
-
-    setupSocketHandlers() {
-        this.socket.onopen = () => {
-            console.log('[UDP] WebSocket connected, sending handshake');
-            const handshake = {
-                type: 'handshake',
-                playerId: this.playerId,
-                protocol: 'binary'
-            };
-            this.socket.send(JSON.stringify(handshake));
-        };
-
-        this.socket.onmessage = (event) => {
-            console.log('[UDP] Raw message received:', event.data);
-            if (event.data === 'READY') {
-                console.log('[UDP] Server acknowledged connection');
-                this.connected = true;
-                this.serverReady = true;
-            }
-        };
-
-        this.socket.onerror = (error) => {
-            console.error('[UDP] WebSocket error:', error);
-            this.connected = false;
-            this.serverReady = false;
-        };
-
-        this.socket.onclose = (event) => {
-            console.log('[UDP] Connection closed:', event.code, event.reason);
-            this.connected = false;
-            this.serverReady = false;
-            this.retryConnection();
-        };
-    }
-
-    retryConnection() {
-        this.cleanup();
-        if (this.retryAttempts >= this.maxRetries) {
-            console.error('[UDP] Max retry attempts reached');
-            return;
-        }
-
-        const delay = Math.min(1000 * Math.pow(2, this.retryAttempts), 5000);
-        console.log(`[UDP] Retrying connection ${this.retryAttempts + 1}/${this.maxRetries} in ${delay}ms`);
-        this.retryAttempts++;
+    // Update message type definitions
+    static MSG_TYPE = {
+        // Connection & Authentication (0x20-0x2F)
+        GAME_MSG_CONNECT: 0x21,
+        GAME_MSG_AUTH_RESPONSE: 0x24,
+        GAME_MSG_ERROR: 0x2F,
+        GAME_MSG_INPUT: 0x25,
         
-        setTimeout(() => this.initSocket(), delay);
-    }
+        // Game State Messages (0x30-0x3F)
+        GAME_MSG_WORLD_STATE: 0x30,
+        GAME_MSG_PLAYER_STATE: 0x31,
+        GAME_MSG_ENTITY_UPDATE: 0x32,
+        GAME_MSG_SPAWN: 0x33,
+        GAME_MSG_DESPAWN: 0x34,
+        GAME_MSG_DISCONNECT: 0x35
+    };
 
-    cleanup() {
-        if (this.keepaliveTimer) {
-            clearInterval(this.keepaliveTimer);
-            this.keepaliveTimer = null;
+    static GAME_STATE = {
+        VERIFYING: 0x01,
+        ACCEPTED: 0x02,
+        REJECTED: 0x03
+    };
+
+    static GAME_ERR = {
+        AUTH: 0x01,
+        INVALID_TOKEN: 0x02,
+        DUPLICATE: 0x03,
+        TIMEOUT: 0x04,
+        PROTOCOL: 0x05,
+        SERVICE_UNAVAILABLE: 0x06
+    };
+
+    // Update input flags to match protocol
+    static INPUT_FLAGS = {
+        FORWARD: 1 << 0,  // W
+        BACKWARD: 1 << 1, // S
+        LEFT: 1 << 2,     // A
+        RIGHT: 1 << 3,    // D
+        ACTION1: 1 << 4,  // Primary action
+        ACTION2: 1 << 5   // Secondary action
+    };
+
+    // Add these new methods to handle protocol messages
+    handleConnectMessage(data) {
+        const view = new DataView(data);
+        const state = view.getUint8(1); // Get connection state
+        
+        this.logState('CONNECTING', 'Connect message received');
+        if (state === UDPConnection.GAME_STATE.VERIFYING) {
+            this.startAuthProcess();
         }
-        // Add any other cleanup needed
     }
 
-    sendMovementData(x, y, rotation, timestamp) {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-            console.warn('[UDP] Socket not ready, queuing movement data');
-            // Optional: Store movement data to send when connection is restored
+    handleAuthResponse(data) {
+        const view = new DataView(data);
+        const state = view.getUint8(1);
+        const playerId = view.getUint32(2, true);
+        const connectTime = view.getUint32(6, true);
+
+        if (state === UDPConnection.GAME_STATE.ACCEPTED) {
+            this.logState('AUTHENTICATED', 'Auth successful');
+            this.playerId = playerId;
+            this.connectTime = connectTime;
+            this.authenticated = true;
+            
+            // Start game loop when auth is accepted
+            this.logState(UDPConnection.CONNECTION_STATES.READY, 'Starting game loop');
+            this.gameReady = true;
+            
+            // Dispatch game start event
+            window.dispatchEvent(new CustomEvent('gameStateReady', {
+                detail: {
+                    playerId: this.playerId,
+                    connectTime: this.connectTime
+                }
+            }));
+
+            if (this.onAuthSuccess) this.onAuthSuccess(playerId);
+        } else {
+            this.handleError(new Error('Auth rejected'), 'AUTH_REJECTED');
+        }
+    }
+
+    handleErrorMessage(data) {
+        const view = new DataView(data);
+        const errorCode = view.getUint8(1);
+        const messageLength = view.getUint16(2, true);
+        const decoder = new TextDecoder();
+        const errorMessage = decoder.decode(data.slice(4, 4 + messageLength));
+
+        console.error('[UDP] Server error:', {
+            code: `0x${errorCode.toString(16)}`,
+            message: errorMessage
+        });
+
+        switch (errorCode) {
+            case UDPConnection.GAME_ERR.AUTH:
+            case UDPConnection.GAME_ERR.INVALID_TOKEN:
+                if (this.onAuthError) this.onAuthError(errorMessage);
+                break;
+            case UDPConnection.GAME_ERR.DUPLICATE:
+                if (this.onDuplicateConnection) this.onDuplicateConnection();
+                break;
+            default:
+                this.handleError(new Error(errorMessage), 'SERVER_ERROR');
+        }
+    }
+
+    // Update message handler to use new protocol
+    handleMessage(event) {
+        if (!(event.data instanceof ArrayBuffer)) {
+            console.warn('[UDP] Received non-binary message');
             return;
         }
 
-        if (!this.connected || !this.serverReady) {
-            console.warn('[UDP] Not connected or server not ready, state:', {
-                connected: this.connected,
-                serverReady: this.serverReady,
-                socketState: this.socket.readyState
-            });
-            return;
-        }
+        const view = new DataView(event.data);
+        const msgType = view.getUint8(0);
 
-        const now = Date.now();
-        if (now - this.lastSentTime >= MovementData.SEND_RATE) {
-            try {
-                const buffer = new ArrayBuffer(17);
-                const view = new DataView(buffer);
-                
-                view.setUint8(0, UDPConnection.MSG_TYPE_MOVEMENT);
-                view.setFloat32(1, x, true);
-                view.setFloat32(5, y, true);
-                view.setFloat32(9, rotation, true);
-                view.setFloat32(13, timestamp || now, true);
+        // Log message receipt
+        this.logMessage(event.data, msgType);
 
-                this.socket.send(buffer);
-                this.lastSentTime = now;
-            } catch (error) {
-                console.error('[UDP] Send failed:', error);
+        try {
+            switch (msgType) {
+                case UDPConnection.MSG_TYPE.GAME_MSG_CONNECT:
+                    this.handleConnectMessage(event.data);
+                    break;
+
+                case UDPConnection.MSG_TYPE.GAME_MSG_AUTH_RESPONSE:
+                    this.handleAuthResponse(event.data);
+                    break;
+
+                case UDPConnection.MSG_TYPE.GAME_MSG_ERROR:
+                    this.handleErrorMessage(event.data);
+                    break;
+
+                case UDPConnection.MSG_TYPE.GAME_MSG_WORLD_STATE:
+                    console.log("worldstate")
+                    this.handleWorldState(event.data);
+                    break;
+
+                case UDPConnection.MSG_TYPE.GAME_MSG_PLAYER_STATE:
+                    if (this.authenticated) {
+                        this.handlePlayerState(event.data);
+                    }
+                    break;
+
+                case UDPConnection.MSG_TYPE.GAME_MSG_DISCONNECT:
+                    this.handleDisconnect(event.data);
+                    break;
+
+                default:
+                    if (this.messageHandlers.has(msgType)) {
+                        this.messageHandlers.get(msgType).forEach(handler => {
+                            try {
+                                handler(event.data);
+                            } catch (error) {
+                                console.error('[UDP] Handler error:', error);
+                            }
+                        });
+                    }
             }
+        } catch (error) {
+            console.error('[UDP] Message handling error:', error);
+            this.handleError(error, 'MESSAGE_PROCESSING_ERROR');
         }
     }
 
-    createMovementBuffer(movement) {
-        const buffer = new ArrayBuffer(20);
+    // Add method to send input messages
+    sendInput(inputFlags, rotation, clientTime) {
+        if (!this.authenticated) return;
+
+        const buffer = new ArrayBuffer(16); // type(1) + flags(2) + rotation(4) + time(4)
         const view = new DataView(buffer);
         
-        view.setFloat32(0, movement.x, true);
-        view.setFloat32(4, movement.y, true);
-        view.setFloat32(8, movement.z, true);
-        view.setFloat32(12, movement.rotation, true);
-        view.setInt32(16, movement.playerId, true);
+        view.setUint8(0, UDPConnection.MSG_TYPE.GAME_MSG_INPUT);
+        view.setUint16(1, inputFlags, true);
+        view.setFloat32(3, rotation, true);
+        view.setUint32(7, clientTime, true);
+        
+        this.sendMessage(buffer);
+    }
+
+    // Add game states
+    static GAME_STATE = {
+        NONE: 0x00,
+        VERIFYING: 0x01,
+        ACCEPTED: 0x02,
+        REJECTED: 0x03
+    };
+
+    // Add error codes
+    static GAME_ERR = {
+        NONE: 0x00,
+        AUTH: 0x01,
+        INVALID_TOKEN: 0x02,
+        DUPLICATE: 0x03,
+        TIMEOUT: 0x04,
+        PROTOCOL: 0x05,
+        SERVICE_UNAVAILABLE: 0x06
+    };
+
+    // Add input flags
+    static INPUT_FLAGS = {
+        NONE: 0x0000,
+        FORWARD: 1 << 0,    // W
+        BACKWARD: 1 << 1,   // S
+        LEFT: 1 << 2,       // A
+        RIGHT: 1 << 3,      // D
+        ACTION1: 1 << 4,    // Primary action
+        ACTION2: 1 << 5,    // Secondary action
+        
+        // Combined states
+        STRAFE_LEFT: (1 << 0) | (1 << 2),   // FORWARD | LEFT
+        STRAFE_RIGHT: (1 << 0) | (1 << 3)    // FORWARD | RIGHT
+    };
+
+    // Add message creation methods for the new protocol
+    createMessageHeader(type, length, flags = 0, sequence = 0) {
+        const buffer = new ArrayBuffer(8); // type(1) + flags(1) + sequence(2) + length(4)
+        const view = new DataView(buffer);
+        
+        view.setUint8(0, type);
+        view.setUint8(1, flags);
+        view.setUint16(2, sequence, true);
+        view.setUint32(4, length, true);
         
         return buffer;
     }
 
-    parseIslandData(buffer) {
+    createInputMessage(inputFlags, changedFlags, rotation, clientTime, ping) {
+        const headerBuffer = this.createMessageHeader(
+            UDPConnection.MSG_TYPE.GAME_MSG_INPUT,
+            12  // size of input message payload
+        );
+        
+        const buffer = new ArrayBuffer(20); // header(8) + payload(12)
         const view = new DataView(buffer);
-        const islandCount = view.getInt32(1, true); // Skip message type byte
-        const islands = [];
         
-        let offset = 5; // Skip message type and count
-        for (let i = 0; i < islandCount; i++) {
-            const island = {
-                x: view.getFloat32(offset, true),
-                y: view.getFloat32(offset + 4, true),
-                radius: view.getFloat32(offset + 8, true)
-            };
-            islands.push(island);
-            offset += 12; // Each island is 12 bytes (3 float32s)
-        }
+        // Copy header
+        new Uint8Array(buffer).set(new Uint8Array(headerBuffer));
         
-        return islands;
+        // Set payload
+        view.setUint16(8, inputFlags, true);
+        view.setUint16(10, changedFlags, true);
+        view.setFloat32(12, rotation, true);
+        view.setUint32(16, clientTime, true);
+        view.setUint16(18, ping, true);
+        
+        return buffer;
     }
 
-    parseShipData(buffer) {
-        const view = new DataView(buffer);
-        const messageType = view.getUint8(0); // First byte is message type
-        
-        // Parse ship_data_t structure starting from byte 1
-        const shipData = {
-            x: view.getFloat32(1, true),          // 4 bytes
-            y: view.getFloat32(5, true),          // 4 bytes
-            rotation: view.getFloat32(9, true),    // 4 bytes
-            sailCount: view.getInt32(13, true),    // 4 bytes
-            cannonCount: view.getInt32(17, true)   // 4 bytes
-        };
-
-        console.log('[UDP] Received ship data:', {
-            messageType,
-            x: shipData.x.toFixed(2),
-            y: shipData.y.toFixed(2),
-            rotation: shipData.rotation.toFixed(2),
-            sails: shipData.sailCount,
-            cannons: shipData.cannonCount
-        });
-
-        return shipData;
-    }
-
-    parseSailsData(buffer) {
-        const view = new DataView(buffer);
-        const count = view.getInt32(1, true);
-        const sails = [];
-        let offset = 5; // Skip type and count
-
-        for (let i = 0; i < count; i++) {
-            const sail = {
-                id: view.getInt32(offset, true),
-                x: view.getFloat32(offset + 4, true),
-                y: view.getFloat32(offset + 8, true),
-                rotation: view.getFloat32(offset + 12, true),
-                efficiency: view.getFloat32(offset + 16, true),
-                attachedToShipId: view.getInt32(offset + 20, true),
-                bindX: view.getFloat32(offset + 24, true),
-                bindY: view.getFloat32(offset + 28, true)
-            };
-            sails.push(sail);
-            offset += 32; // Each sail is 32 bytes
-        }
-
-        return sails;
-    }
-
-    parseCannonsData(buffer) {
-        const view = new DataView(buffer);
-        const count = view.getInt32(1, true);
-        const cannons = [];
-        let offset = 5; // Skip type and count
-
-        console.log('[UDP] Parsing', count, 'cannons');
-        for (let i = 0; i < count; i++) {
-            const cannon = {
-                id: view.getInt32(offset, true),
-                x: view.getFloat32(offset + 4, true),
-                y: view.getFloat32(offset + 8, true),
-                rotation: view.getFloat32(offset + 12, true),
-                efficiency: view.getFloat32(offset + 16, true),
-                attachedToShipId: view.getInt32(offset + 20, true),
-                bindX: view.getFloat32(offset + 24, true),
-                bindY: view.getFloat32(offset + 28, true)
-            };
-            console.log(`[UDP] Cannon ${i + 1}/${count}:`, {
-                id: cannon.id,
-                rotation: cannon.rotation.toFixed(2),
-                bindPos: `(${cannon.bindX.toFixed(2)}, ${cannon.bindY.toFixed(2)})`,
-                raw: new Uint8Array(buffer.slice(offset + 12, offset + 16))
-            });
-            cannons.push(cannon);
-            offset += 32;
-        }
-
-        return cannons;
-    }
-
-    parseSteeringData(buffer) {
-        const view = new DataView(buffer);
-        const steering = {
-            id: view.getInt32(1, true),
-            x: view.getFloat32(5, true),
-            y: view.getFloat32(9, true),
-            rotation: view.getFloat32(13, true),
-            attachedToShipId: view.getInt32(17, true),
-            bindX: view.getFloat32(21, true),
-            bindY: view.getFloat32(25, true)
-        };
-
-        return steering;
-    }
-
-    parseSelfPosition(buffer) {
-        const view = new DataView(buffer);
-        const bufferSize = buffer.byteLength;
-        
-        // Log buffer info for debugging
-        // console.log('[UDP] Parsing self position:', {
-        //     bufferSize,
-        //     expectedSize: 21,
-        //     messageType: view.getUint8(0)
-        // });
-        
-        // Check buffer size for minimum required bytes (21 bytes)
-        if (bufferSize < 21) {
-            console.error('[UDP] Buffer too small for self position:', bufferSize);
-            return {
-                x: 0,
-                y: 0,
-                z: 0,
-                rotation: 0,
-                mounted: 0,
-                shipId: 0
-            };
-        }
-
+    createAuthRequest(token, version) {
         try {
-            return {
-                x: view.getFloat32(1, true),          // 4 bytes
-                y: view.getFloat32(5, true),          // 4 bytes
-                z: view.getFloat32(9, true),          // 4 bytes
-                rotation: view.getFloat32(13, true),   // 4 bytes
-                mounted: view.getInt32(17, true),      // 4 bytes
-                shipId: bufferSize >= 25 ? view.getInt32(21, true) : 0  // 4 bytes, optional
-            };
-        } catch (error) {
-            console.error('[UDP] Error parsing self position:', error);
-            return {
-                x: 0,
-                y: 0,
-                z: 0,
-                rotation: 0,
-                mounted: 0,
-                shipId: 0
-            };
-        }
-    }
-
-    parseOtherPositions(buffer) {
-        try {
+            // Encode token to Uint8Array
+            const encoder = new TextEncoder();
+            const tokenBytes = encoder.encode(token);
+            
+            // Create fixed-size buffer for token
+            const paddedToken = new Uint8Array(256);
+            // Copy token bytes, up to 256 bytes
+            paddedToken.set(tokenBytes.slice(0, 256));
+            
+            // Create message buffer
+            const headerBuffer = this.createMessageHeader(
+                UDPConnection.MSG_TYPE.GAME_MSG_AUTH_REQUEST,
+                258  // 256 for token + 2 for version
+            );
+            
+            const buffer = new ArrayBuffer(266); // header(8) + token(256) + version(2)
             const view = new DataView(buffer);
-            const messageType = view.getUint8(0);
-            let offset = 1;
+            
+            // Copy header
+            new Uint8Array(buffer).set(new Uint8Array(headerBuffer));
+            
+            // Copy padded token
+            new Uint8Array(buffer).set(paddedToken, 8);
+            
+            // Set version
+            view.setUint16(264, version, true);
+            
+            console.log('[UDP] Auth request created:', {
+                tokenLength: tokenBytes.length,
+                totalLength: buffer.byteLength
+            });
+            
+            return buffer;
+        } catch (error) {
+            console.error('[UDP] Auth request creation failed:', error);
+            throw new Error('Failed to create auth request: ' + error.message);
+        }
+    }
 
-            const clientCount = view.getUint8(offset);
-            offset += 1;
+    // Add connection states
+    static CONN_STATE = {
+        DISCONNECTED: 0x00,
+        CONNECTING: 0x01,
+    };
 
-            // Only log when clients are actually present
-            if (clientCount > 0) {
-                console.log(`[UDP] Received positions for ${clientCount} clients`);
+    // Add error codes
+    static ERR_CODE = {
+        INVALID_TOKEN: 0x01,
+        SERVER_FULL: 0x02,
+        ALREADY_CONNECTED: 0x03,
+        BAD_VERSION: 0x04,
+        BAD_STATE: 0x05
+    };
+
+    // Add message creation helpers
+    createMessageHeader(type, payloadLength, flags = 0x00) {
+        const header = new ArrayBuffer(4);
+        const view = new DataView(header);
+        view.setUint8(0, type);
+        view.setUint8(1, flags);
+        view.setUint16(2, payloadLength, false); // big endian
+        return header;
+    }
+
+    createConnectRequest() {
+        const token = this.auth?.getToken();
+        if (!token) throw new Error('No auth token available');
+
+        const tokenBytes = new TextEncoder().encode(token);
+        const header = this.createMessageHeader(UDPConnection.MSG_TYPE.CONNECT_REQUEST, tokenBytes.length);
+        
+        const message = new Uint8Array(4 + tokenBytes.length);
+        message.set(new Uint8Array(header), 0);
+        message.set(tokenBytes, 4);
+        
+        return message.buffer;
+    }
+
+    // Add protocol constants
+    static PROTOCOL_VERSION = 1;
+    static USERNAME_MAX_LENGTH = 32;
+    
+    // Add movement flags
+    static MOVE_FLAGS = {
+        LEFT: 0x01,
+        RIGHT: 0x02,
+        UP: 0x04,
+        DOWN: 0x08
+    };
+
+    // Define connection states before they're used
+    static CONNECTION_STATES = {
+        DISCONNECTED: 'DISCONNECTED',
+        HANDSHAKE: 'HANDSHAKE',
+        AUTH_REQUIRED: 'AUTH_REQUIRED',
+        AUTHENTICATED: 'AUTHENTICATED',
+        READY: 'READY',
+        ERROR: 'ERROR',
+        CONNECTING: 'CONNECTING',
+        CONNECTED: 'CONNECTED'
+    };
+
+    // Add error codes
+    static SOCKET_ERRORS = {
+        ECONNREFUSED: 'ECONNREFUSED',
+        ETIMEDOUT: 'ETIMEDOUT',
+        ECONNRESET: 'ECONNRESET',
+        EPIPE: 'EPIPE',
+        ABNORMAL_CLOSURE: 'ABNORMAL_CLOSURE'  // Add this
+    };
+
+    // Add error messages
+    static ERROR_MESSAGES = {
+        ECONNREFUSED: 'Connection refused by server',
+        ETIMEDOUT: 'Connection timed out',
+        ECONNRESET: 'Connection reset by server',
+        EPIPE: 'Broken pipe - server closed connection',
+        ABNORMAL_CLOSURE: 'Connection closed abnormally by the server'
+    };
+
+    // Update connection types
+    static CONNECTION_TYPE = {
+        WEBSOCKET: 'websocket' // Keep for fallback
+    };
+
+   
+
+    constructor(playerId, auth) {
+        // Initialize critical properties first
+        this.stateLog = [];
+        this.connectionState = UDPConnection.CONNECTION_STATES.DISCONNECTED;
+        
+        // Initialize message queues and processing state
+        this.messageQueue = [];
+        this.preAuthQueue = [];
+        this.pendingMessages = [];
+        this.messageProcessing = {
+            active: false,
+            lastProcessed: 0,
+            processInterval: 50 // Process messages every 50ms
+        };
+        
+        // Initialize connection tracking
+        this.initializing = false;
+        this.connecting = false;
+        this.connectionAttempts = 0;
+        this.maxConnectionAttempts = 5;
+        
+        // Initialize core properties
+        this.auth = auth;
+        this.connected = false;
+        this.serverReady = false;
+        this.authenticated = false;
+        this.ready = false;
+
+        // Validate and store player ID
+        const authPlayerId = auth?.getPlayerId();
+        if (playerId !== authPlayerId) {
+            console.warn('[UDP] Player ID mismatch:', {
+                provided: playerId,
+                authId: authPlayerId
+            });
+            this.playerId = authPlayerId;
+        } else {
+            this.playerId = playerId;
+        }
+
+        // Initialize connection health tracking
+        this.connectionHealth = {
+            lastMessageTime: Date.now(),
+            messageCount: 0,
+            healthyThreshold: 5000,
+            reconnectDelay: 1000
+        };
+
+        console.log('[UDP] Initializing connection with player ID:', this.playerId);
+        
+        // Single initialization call
+        if (!this.initializing) {
+            this.initializing = true;
+            this.initSocket().catch(error => {
+                console.error('[UDP] Initial connection failed:', error);
+                this.handleError(error, this.getSocketErrorType(error));
+            }).finally(() => {
+                this.initializing = false;
+            });
+        }
+        
+        // Add message type mappings for better logging
+        this.messageTypes = {
+            128: 'CONNECT_SUCCESS',
+            129: 'WORLD_STATE',
+            96: 'ENTITY_UPDATE',
+            0x80: 'PLAYER_MSG_CONNECT',
+            0x81: 'PLAYER_MSG_AUTH',
+            0x8F: 'PLAYER_MSG_ERROR',
+            0x30: 'MSG_WORLD_STATE',
+        };
+
+        // Add message listeners map
+        this.messageListeners = new Map();
+        
+        // Add default message types if needed
+        // Add message log buffer
+        this.messageLog = {
+            capacity: 100,
+            messages: [],
+            enabled: true
+        };
+
+        // Add message listeners
+        this.messageHandlers = new Map();
+    }
+
+    logState(state, reason) {
+        try {
+            const timestamp = new Date().toISOString();
+            if (!this.stateLog) {
+                this.stateLog = []; // Ensure stateLog exists
             }
             
-            const positions = [];
-            for (let i = 0; i < clientCount; i++) {
-                try {
-                    const clientData = {
-                        clientId: view.getUint32(offset, true),
-                        x: view.getFloat32(offset + 4, true),
-                        y: view.getFloat32(offset + 8, true),
-                        rotation: view.getFloat32(offset + 12, true),
-                        mounted: view.getUint8(offset + 16),
-                        shipId: view.getInt32(offset + 20, true)
-                    };
-
-                    // Only add valid positions
-                    if (Number.isFinite(clientData.x) && 
-                        Number.isFinite(clientData.y) && 
-                        Number.isFinite(clientData.rotation)) {
-                        positions.push(clientData);
-                    }
-                } catch (err) {
-                    console.error(`[UDP] Error parsing client ${i}:`, err);
+            if (this.connectionState !== state) {
+                console.log(`[UDP] State transition: ${this.connectionState} -> ${state} (${reason})`);
+                this.stateLog.push({ timestamp, from: this.connectionState, to: state, reason });
+                this.connectionState = state;
+                
+                if (this.onStateChange) {
+                    this.onStateChange(state, reason);
                 }
-
-                offset += 24;
             }
-
-            return positions;
         } catch (error) {
-            console.error('[UDP] Failed to parse other positions:', error);
-            return [];
+            console.error('[UDP] Error logging state:', {
+                state,
+                reason,
+                error: error.message
+            });
         }
     }
 
-    // Update network byte order (big-endian)
-    sendMountRequest(shipId, moduleId) {
-        // Ensure IDs are valid numbers
-        const validModuleId = parseInt(moduleId, 10);
-        if (isNaN(validModuleId)) {
-            console.error('[UDP] Invalid module ID for mount request:', moduleId);
+    async initSocket() {
+        try {
+            if (this.connecting) {
+                console.log('[UDP] Connection attempt already in progress');
+                return;
+            }
+            this.connecting = true;
+
+            // Initialize socketState
+            this.socketState = {
+                closing: false,
+                messageQueue: [],
+                lastMessageTime: Date.now()
+            };
+
+            const token = this.auth?.getToken();
+            if (!token) {
+                throw new Error('No auth token available');
+            }
+
+            // Build WebSocket URL with token as query parameter
+            const wsUrl = new URL('ws://192.168.8.3:8080/game/connect');
+            wsUrl.searchParams.append('token', token);
+            
+            console.log('[UDP] Connecting to:', wsUrl.toString().replace(token, '***'));
+            
+            this.socket = new WebSocket(wsUrl);
+            this.socket.binaryType = 'arraybuffer';
+
+            // Bind handleMessage to class instance
+            this.handleMessage = this.handleMessage.bind(this);
+
+            // Set up socket handlers immediately
+            this.socket.onopen = () => {
+                console.log('[UDP] WebSocket connection opened');
+                this.logState(UDPConnection.CONNECTION_STATES.CONNECTING, 'Socket opened');
+                
+                // Log debugging info
+                console.log('[UDP] Socket state after open:', {
+                    readyState: this.socket.readyState,
+                    binaryType: this.socket.binaryType,
+                    protocol: this.socket.protocol
+                });
+            };
+
+            // Enhanced message handler with more logging
+            this.socket.onmessage = this.handleMessage;
+
+            // Add error logging
+            this.socket.onerror = (error) => {
+                console.error('[UDP] WebSocket error in state', this.connectionState, error);
+            };
+
+            this.socket.onclose = (event) => {
+                console.log('[UDP] Connection closed in state', this.connectionState, {
+                    code: event.code,
+                    reason: event.reason || 'No reason provided',
+                    wasClean: event.wasClean
+                });
+            };
+
+        } catch (error) {
+            console.error('[UDP] Socket initialization failed:', error);
+            this.handleError(error, this.getSocketErrorType(error));
+        } finally {
+            this.connecting = false;
+        }
+    }
+
+    // Add these new methods
+    addMessageHandler(type, handler) {
+        if (!this.messageHandlers.has(type)) {
+            this.messageHandlers.set(type, new Set());
+        }
+        this.messageHandlers.get(type).add(handler);
+        console.log(`[UDP] Added handler for message type: 0x${type.toString(16)}`);
+    }
+
+    removeMessageHandler(type, handler) {
+        if (this.messageHandlers.has(type)) {
+            this.messageHandlers.get(type).delete(handler);
+        }
+    }
+
+    logMessage(message, type) {
+        if (!this.messageLog.enabled) return;
+        
+        this.messageLog.messages.push({
+            timestamp: new Date().toISOString(),
+            type: type,
+            data: message,
+            state: this.connectionState
+        });
+
+        // Keep log size in check
+        while (this.messageLog.messages.length > this.messageLog.capacity) {
+            this.messageLog.messages.shift();
+        }
+    }
+
+    // Example usage in your game:
+    setupMessageHandlers() {
+        // Add handlers for specific message types
+        this.addMessageHandler(0x20, (data) => {
+            console.log('[UDP] Player state update received');
+            this.handlePlayerState(data);
+        });
+
+        this.addMessageHandler(0x30, (data) => {
+            console.log('[UDP] World state update received');
+            this.handleWorldState(data);
+        });
+    }
+
+    handleWorldState(data) {
+        const view = new DataView(data);
+        const msgType = view.getUint8(0);  // Should be 0x30 (MSG_WORLD_STATE)
+        const state = view.getUint8(1);    // Game state (0x02 for ACCEPTED)
+        
+        console.log('[UDP] World state received:', {
+            type: `0x${msgType.toString(16)}`,
+            state: `0x${state.toString(16)}`
+        });
+
+        if (state === UDPConnection.GAME_STATE.ACCEPTED) {
+            console.log('[UDP] Game state ACCEPTED, starting game loop');
+            
+            // Update connection state
+            this.logState(UDPConnection.CONNECTION_STATES.READY, 'World state accepted');
+            this.authenticated = true;
+            this.ready = true;
+            
+            // Dispatch game ready event
+            window.dispatchEvent(new CustomEvent('gameStateReady', {
+                detail: {
+                    playerId: this.playerId,
+                    timestamp: Date.now()
+                }
+            }));
+
+            // Process any queued messages
+            this.processMessageQueue();
+            
+            // Optional: Start sending periodic updates if needed
+            this.startGameLoop();
+        }
+    }
+
+    startGameLoop() {
+        if (this.gameLoopInterval) {
+            clearInterval(this.gameLoopInterval);
+        }
+
+        // Start sending regular updates to server (if needed)
+        this.gameLoopInterval = setInterval(() => {
+            if (this.ready && this.authenticated) {
+                // Your game loop logic here
+                if (this.onGameTick) {
+                    this.onGameTick();
+                }
+            }
+        }, 50); // 20Hz update rate
+    }
+
+    // Add missing methods
+    startAuthProcess() {
+        console.log('[UDP] Starting auth process');
+        const token = this.auth?.getToken();
+        if (!token) {
+            this.handleError(new Error('No auth token available'), 'AUTH_ERROR');
             return;
         }
 
-        const buffer = new ArrayBuffer(5);
-        const view = new DataView(buffer);
-        view.setUint8(0, UDPConnection.MSG_TYPE_MOUNT_REQUEST);
-        view.setInt32(1, validModuleId, true); // Use little-endian to match server expectation
-        
-        console.log('[UDP] Sending mount request:', { 
-            moduleId: validModuleId, 
-            raw: new Uint8Array(buffer)
-        });
-        
-        this.socket.send(buffer);
+        // Send auth request
+        const authRequest = this.createAuthRequest(token, UDPConnection.PROTOCOL_VERSION);
+        this.sendMessage(authRequest);
     }
 
-    sendControlInput(moduleId, sailOpenness = 0, steeringAngle = 0) {
-        const buffer = new ArrayBuffer(13);
-        const view = new DataView(buffer);
+    handleError(error, type = 'UNKNOWN') {
+        console.error(`[UDP] Error (${type}):`, error.message);
         
-        // Use big-endian (network byte order)
-        view.setUint8(0, UDPConnection.MSG_TYPE_CONTROL_INPUT);
-        view.setFloat32(1, Math.max(0, Math.min(1, sailOpenness)), false);
-        view.setFloat32(5, Math.max(-1, Math.min(1, steeringAngle)), false);
-        view.setInt32(9, moduleId, false);
+        // Log to state history
+        this.logState('ERROR', `${type}: ${error.message}`);
         
-        console.log('[UDP] Sending control input:', {
-            moduleId,
-            sailOpenness: sailOpenness.toFixed(2),
-            steeringAngle: steeringAngle.toFixed(2)
-        });
-        this.socket.send(buffer);
+        // Notify any error handlers
+        if (this.onError) {
+            this.onError(error, type);
+        }
+
+        // Handle specific error types
+        switch (type) {
+            case 'AUTH_ERROR':
+                if (this.onAuthError) this.onAuthError(error.message);
+                break;
+            case 'CONNECTION_ERROR':
+                this.reconnect();
+                break;
+        }
     }
 
-    fireCannon(cannonId, angle) {
-        // Create 9-byte buffer for fire cannon command
-        const buffer = new ArrayBuffer(9);
+    processMessageQueue() {
+        if (!this.ready || !this.messageQueue.length) return;
+
+        console.log('[UDP] Processing queued messages:', this.messageQueue.length);
+        
+        while (this.messageQueue.length > 0) {
+            const message = this.messageQueue.shift();
+            this.handleGameMessage(message.type, message.data);
+        }
+    }
+
+    sendMessage(data) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            console.warn('[UDP] Cannot send message - socket not ready');
+            return;
+        }
+
+        try {
+            const frame = WebSocketFrame.createBinaryFrame(data);
+            this.socket.send(frame);
+        } catch (error) {
+            console.error('[UDP] Send error:', error);
+            this.handleError(error, 'SEND_ERROR');
+        }
+    }
+
+    sendMovementData(x, y, rotation, timestamp) {
+        if (!this.authenticated) {
+            console.warn('[UDP] Cannot send movement - not authenticated');
+            return;
+        }
+
+        const buffer = new ArrayBuffer(17); // type(1) + x(4) + y(4) + rot(4) + time(4)
         const view = new DataView(buffer);
         
-        // Set message type (1 byte)
-        view.setUint8(0, UDPConnection.MSG_TYPE_FIRE_CANNON);
+        view.setUint8(0, UDPConnection.MSG_TYPE.GAME_MSG_PLAYER_STATE);
+        view.setFloat32(1, x, true);
+        view.setFloat32(5, y, true);
+        view.setFloat32(9, rotation, true);
+        view.setUint32(13, timestamp, true);
         
-        // Set cannon ID (4 bytes)
-        view.setInt32(1, cannonId, true);
+        this.sendMessage(buffer);
+    }
+
+    reconnect() {
+        if (this.connecting) return;
         
-        // Set firing angle (4 bytes)
-        view.setFloat32(5, angle, true);
+        console.log('[UDP] Attempting reconnection');
+        this.connectionAttempts++;
         
-        console.log('[UDP] Sending fire cannon:', { cannonId, angle });
-        this.socket.send(buffer);
+        if (this.connectionAttempts <= this.maxConnectionAttempts) {
+            setTimeout(() => {
+                this.initSocket();
+            }, this.connectionHealth.reconnectDelay);
+        } else {
+            console.error('[UDP] Max reconnection attempts reached');
+            this.handleError(new Error('Max reconnection attempts reached'), 'CONNECTION_FAILED');
+        }
     }
 }
-
 export class InputHandler {
     // Increase base movement speed
     static MOVEMENT_SPEED = 40;
@@ -1138,5 +1085,3 @@ export class InputHandler {
         return vector;
     }
 }
-
-//
