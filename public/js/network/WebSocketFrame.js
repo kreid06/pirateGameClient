@@ -1,27 +1,38 @@
 export class WebSocketFrame {
+    static OPCODES = {
+        CONTINUATION: 0x0,
+        TEXT: 0x1,
+        BINARY: 0x2,
+        CLOSE: 0x8,
+        PING: 0x9,
+        PONG: 0xA
+    };
+
     static createBinaryFrame(data) {
         const payload = new Uint8Array(data);
         const payloadLength = payload.length;
         
-        let frameSize = 0;
-        let offset = 2;
+        // Calculate frame size and offsets
+        let frameSize, payloadOffset;
         
         if (payloadLength < 126) {
-            frameSize = payloadLength + 6;
+            frameSize = 2 + 4 + payloadLength; // Header(2) + Mask(4) + Payload
+            payloadOffset = 6; // Header(2) + Mask(4)
         } else if (payloadLength < 65536) {
-            frameSize = payloadLength + 8;
-            offset = 4;
+            frameSize = 4 + 4 + payloadLength; // Header(2) + Length(2) + Mask(4) + Payload
+            payloadOffset = 8; // Header(2) + Length(2) + Mask(4)
         } else {
-            frameSize = payloadLength + 14;
-            offset = 10;
+            frameSize = 10 + 4 + payloadLength; // Header(2) + Length(8) + Mask(4) + Payload
+            payloadOffset = 14; // Header(2) + Length(8) + Mask(4)
         }
-        
+
+        // Create frame buffer
         const frame = new Uint8Array(frameSize);
-        const mask = new Uint8Array(4);
-        crypto.getRandomValues(mask);
+
+        // Set FIN and opcode
+        frame[0] = 0x80 | this.OPCODES.BINARY;
         
-        frame[0] = 0x82;
-        
+        // Set length and masking bit
         if (payloadLength < 126) {
             frame[1] = 0x80 | payloadLength;
         } else if (payloadLength < 65536) {
@@ -30,17 +41,19 @@ export class WebSocketFrame {
             frame[3] = payloadLength & 0xFF;
         } else {
             frame[1] = 0x80 | 127;
-            const lengthBytes = new DataView(new ArrayBuffer(8));
-            lengthBytes.setBigUint64(0, BigInt(payloadLength));
-            frame.set(new Uint8Array(lengthBytes.buffer), 2);
+            const view = new DataView(frame.buffer);
+            view.setBigUint64(2, BigInt(payloadLength), false);
         }
-        
-        frame.set(mask, offset);
-        
+
+        // Generate and set mask
+        const mask = crypto.getRandomValues(new Uint8Array(4));
+        frame.set(mask, payloadOffset - 4);
+
+        // Copy and mask payload
         for (let i = 0; i < payloadLength; i++) {
-            frame[offset + 4 + i] = payload[i] ^ mask[i % 4];
+            frame[payloadOffset + i] = payload[i] ^ mask[i % 4];
         }
-        
+
         return frame.buffer;
     }
 }

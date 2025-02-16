@@ -243,6 +243,7 @@ export class UDPConnection {
         this.socket = null;
         this.pendingMessages = [];
         this.lastMessageTime = Date.now();
+        this.sequenceNumber = 0; // Add sequence number for movement messages
         
         // Start connection
         this.initSocket().catch(error => {
@@ -307,19 +308,29 @@ export class UDPConnection {
     }
 
     // Expose necessary methods for external use
+    // Temporarily disable movement data sending
     sendMovementData(x, y, rotation, timestamp) {
-        if (!this.authenticated) return;
-        
-        const buffer = new ArrayBuffer(17); // type(1) + x(4) + y(4) + rotation(4) + time(4)
-        const view = new DataView(buffer);
-        
-        view.setUint8(0, MessageTypes.GAME_MSG_PLAYER_STATE);
-        view.setFloat32(1, x, true);
-        view.setFloat32(5, y, true);
-        view.setFloat32(9, rotation, true);
-        view.setUint32(13, timestamp, true);
-        
-        this.sendMessage(buffer);
+        // Disabled for physics implementation
+        // if (!this.authenticated) return;
+        // 
+        // try {
+        //     const messageSize = 19;
+        //     const buffer = new ArrayBuffer(messageSize);
+        //     const view = new DataView(buffer);
+        //     
+        //     view.setUint8(0, MessageTypes.GAME_MSG_PLAYER_STATE);
+        //     view.setUint16(1, this.sequenceNumber++ % 65536, true);
+        //     view.setUint32(3, timestamp >>> 0, true);
+        //     view.setFloat32(7, x, true);
+        //     view.setFloat32(11, y, true);
+        //     view.setFloat32(15, rotation, true);
+        //
+        //     this.sendMessage(buffer);
+        // } catch (error) {
+        //     console.error('[Movement] Error creating message:', error);
+        //     this.handleError(error, 'MOVEMENT_MESSAGE_ERROR');
+        // }
+        return;
     }
 
     sendMessage(data) {
@@ -329,9 +340,18 @@ export class UDPConnection {
         }
 
         try {
+            if (!(data instanceof ArrayBuffer)) {
+                throw new Error('Data must be ArrayBuffer');
+            }
+
             const frame = WebSocketFrame.createBinaryFrame(data);
             this.socket.send(frame);
         } catch (error) {
+            console.error('[UDP] Send error:', {
+                error: error.message,
+                dataType: data?.constructor?.name,
+                dataLength: data?.byteLength
+            });
             this.handleError(error, 'SEND_ERROR');
         }
     }
@@ -357,35 +377,44 @@ export class UDPConnection {
     handleWorldUpdate(worldState) {
         if (!this.authenticated) return;
 
-        // Update server time
-        this.serverTime = worldState.serverTime;
+        // Check if this is our first world state
+        if (!this.ready && worldState.state === GameStates.ACCEPTED) {
+            this.ready = true;
+            this.connectionState.transition('READY', 'World state accepted');
+            
+            // Start game loop only after world state is accepted
+            window.dispatchEvent(new CustomEvent('gameReady', {
+                detail: {
+                    playerId: this.playerId,
+                    serverTime: worldState.serverTime
+                }
+            }));
+        }
 
-        // Handle player updates
+        // Update game state
+        this.serverTime = worldState.serverTime;
         worldState.playerStates.forEach(player => {
             if (player.id !== this.playerId) {
                 this.updateOtherPlayer(player);
             } else {
-                // Update physics and input prediction
-                const serverState = {
-                    x: player.x,
-                    y: player.y,
-                    angle: player.rotation
-                };
-
-                // Update physics state
-                this.physics.reconcileState(serverState);
-                
-                // Update input prediction
-                this.inputManager.updatePredictedState(serverState);
-                this.inputManager.processServerUpdate(worldState.serverTime);
+                this.reconcilePlayerState(player);
             }
         });
     }
 
-    updateOtherPlayer(playerState) {
-        // Implement other player updates
-        // This will be used when we add multiplayer rendering
-        console.log('[UDP] Updating other player:', playerState);
+    reconcilePlayerState(serverPlayer) {
+        const serverState = {
+            x: serverPlayer.x,
+            y: serverPlayer.y,
+            angle: serverPlayer.rotation
+        };
+
+        // Update physics state
+        this.physics.reconcileState(serverState);
+        
+        // Update input prediction
+        this.inputManager.updatePredictedState(serverState);
+        this.inputManager.processServerUpdate(this.serverTime);
     }
 
     startAuthProcess() {
@@ -396,12 +425,39 @@ export class UDPConnection {
             return;
         }
 
-        const buffer = new ArrayBuffer(3); // type(1) + version(2)
-        const view = new DataView(buffer);
-        view.setUint8(0, MessageTypes.GAME_MSG_AUTH_RESPONSE);
-        view.setUint16(1, 1, true); // protocol version
+        try {
+            // Create a buffer for auth message:
+            // type(1) + length(2) + token(variable) + version(2)
+            const encoder = new TextEncoder();
+            const tokenBytes = encoder.encode(token);
+            const messageLength = 1 + 2 + tokenBytes.length + 2;
+            const buffer = new ArrayBuffer(messageLength);
+            const view = new DataView(buffer);
+            const uint8View = new Uint8Array(buffer);
 
-        this.sendMessage(buffer);
+            // Write message type
+            view.setUint8(0, MessageTypes.GAME_MSG_AUTH_RESPONSE);
+            
+            // Write token length (2 bytes)
+            view.setUint16(1, tokenBytes.length, true);
+            
+            // Copy token bytes
+            uint8View.set(tokenBytes, 3);
+            
+            // Write protocol version
+            view.setUint16(3 + tokenBytes.length, 1, true);
+
+            console.log('[UDP] Auth message created:', {
+                totalLength: messageLength,
+                tokenLength: tokenBytes.length,
+                type: MessageTypes.GAME_MSG_AUTH_RESPONSE
+            });
+
+            this.sendMessage(buffer);
+        } catch (error) {
+            console.error('[UDP] Auth message creation failed:', error);
+            this.handleError(error, 'AUTH_MESSAGE_ERROR');
+        }
     }
 }
 

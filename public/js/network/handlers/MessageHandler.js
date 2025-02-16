@@ -34,16 +34,12 @@ export class MessageHandler {
     registerDefaultHandlers() {
         // Handle connect message (0x21)
         this.registerHandler(MessageTypes.GAME_MSG_CONNECT, (data) => {
-            try {
-                const view = new DataView(data);
-                const state = view.getUint8(1);
-                
-                console.log('[MessageHandler] Connect message received:', { state });
-                if (state === GameStates.VERIFYING) {
-                    this.connection.startAuthProcess();
-                }
-            } catch (error) {
-                console.error('[MessageHandler] Error parsing connect message:', error);
+            const view = new DataView(data);
+            const state = view.getUint8(1);
+            
+            console.log('[MessageHandler] Connect message received:', { state });
+            if (state === GameStates.VERIFYING) {
+                this.connection.startAuthProcess();
             }
         });
 
@@ -51,16 +47,11 @@ export class MessageHandler {
         this.registerHandler(MessageTypes.GAME_MSG_AUTH_RESPONSE, (data) => {
             const view = new DataView(data);
             const state = view.getUint8(1);
-            const playerId = view.getUint32(2, true);
-            const connectTime = view.getUint32(6, true);
-
-            console.log('[MessageHandler] Auth response:', { state, playerId, connectTime });
-
+            
             if (state === GameStates.ACCEPTED) {
                 this.connection.handleAuthSuccess({
-                    playerId,
-                    connectTime,
-                    state
+                    playerId: view.getUint32(2, true),
+                    connectTime: view.getUint32(6, true)
                 });
             } else {
                 this.connection.handleError(new Error('Auth rejected'), 'AUTH_REJECTED');
@@ -71,36 +62,88 @@ export class MessageHandler {
         this.registerHandler(MessageTypes.GAME_MSG_WORLD_STATE, (data) => {
             try {
                 const view = new DataView(data);
-                if (data.byteLength < 8) {
-                    console.error('[MessageHandler] World state message too short');
+                
+                // Message structure:
+                // type (1) + state (1) + length (2) + time (4) + playerCount (2) + bounds (16) + flags (4)
+                const HEADER_SIZE = 30;
+                
+                if (data.byteLength < HEADER_SIZE) {
+                    console.error('[MessageHandler] World state message too short:', data.byteLength);
                     return;
                 }
 
                 const state = view.getUint8(1);
-                const worldState = {
-                    serverTime: view.getUint32(2, true),
-                    playerCount: view.getUint16(6, true),
-                    playerStates: []
+                const payloadLength = view.getUint16(2, true);
+                const serverTime = view.getUint32(4, true);
+                const playerCount = view.getUint16(8, true);
+
+                // Parse world bounds
+                const worldBounds = {
+                    minX: view.getFloat32(10, true),
+                    minY: view.getFloat32(14, true),
+                    maxX: view.getFloat32(18, true),
+                    maxY: view.getFloat32(22, true)
                 };
 
-                let offset = 8;
-                for (let i = 0; i < worldState.playerCount && offset + 16 <= data.byteLength; i++) {
-                    const playerState = {
-                        id: view.getUint32(offset, true),
-                        x: view.getFloat32(offset + 4, true),
-                        y: view.getFloat32(offset + 8, true),
-                        rotation: view.getFloat32(offset + 12, true)
-                    };
-                    worldState.playerStates.push(playerState);
-                    offset += 16;
+                // Parse flags
+                const gameFlags = view.getUint32(26, true);
+
+                console.log('[MessageHandler] Parsing world state:', {
+                    state,
+                    payloadLength,
+                    serverTime,
+                    playerCount,
+                    worldBounds,
+                    gameFlags
+                });
+
+                // Initialize world state object
+                const worldState = {
+                    state,
+                    serverTime,
+                    playerCount,
+                    playerStates: [],
+                    bounds: worldBounds,
+                    flags: gameFlags
+                };
+
+                // Process any player states that follow
+                if (data.byteLength > HEADER_SIZE) {
+                    const PLAYER_DATA_SIZE = 16; // id(4) + x(4) + y(4) + rotation(4)
+                    let offset = HEADER_SIZE;
+
+                    for (let i = 0; i < playerCount && offset + PLAYER_DATA_SIZE <= data.byteLength; i++) {
+                        const playerState = {
+                            id: view.getUint32(offset, true),
+                            x: view.getFloat32(offset + 4, true),
+                            y: view.getFloat32(offset + 8, true),
+                            rotation: view.getFloat32(offset + 12, true)
+                        };
+
+                        if (this.validatePlayerState(playerState)) {
+                            worldState.playerStates.push(playerState);
+                        }
+
+                        offset += PLAYER_DATA_SIZE;
+                    }
                 }
 
-                console.log('[MessageHandler] World state received:', worldState);
                 this.connection.handleWorldUpdate(worldState);
             } catch (error) {
                 console.error('[MessageHandler] Error parsing world state:', error);
             }
         });
+    }
+
+    validatePlayerState(state) {
+        return (
+            state &&
+            Number.isFinite(state.x) &&
+            Number.isFinite(state.y) &&
+            Number.isFinite(state.rotation) &&
+            typeof state.id === 'number' &&
+            state.id >= 0
+        );
     }
 
     registerHandler(type, handler) {

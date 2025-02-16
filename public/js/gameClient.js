@@ -492,6 +492,14 @@ export class GameClient {
                 // Start game loop only when state is ready
                 this.startGameLoop();
             });
+
+            // Listen for game ready event instead of auth success
+            window.addEventListener('gameReady', (event) => {
+                console.log('[Game] World state accepted, starting game loop');
+                this.playerId = event.detail.playerId;
+                this.serverTime = event.detail.serverTime;
+                this.startGameLoop();
+            });
         } catch (error) {
             console.error('[GameClient] Initialization error:', error);
             throw error; // Re-throw to prevent partial initialization
@@ -666,93 +674,23 @@ export class GameClient {
     }
 
     updateWorldPosition() {
-        // Block movement if not ready
         if (!this.gameReady) return;
 
-        const connection = this.ensureConnection();
-        if (!connection) return;
-
-        const now = performance.now();
-        const deltaTime = now - this.lastUpdateTime;
-        this.lastUpdateTime = now;
-
-        // First update rotation based on mouse position
-        this.updateRotation();
-
         const input = {
-            sequenceNumber: this.inputSequenceNumber++,
-            timestamp: now,
-            keys: { ...this.keys },
-            dt: deltaTime
+            up: this.keys['KeyW'] || this.keys['ArrowUp'],
+            down: this.keys['KeyS'] || this.keys['ArrowDown'],
+            left: this.keys['KeyA'] || this.keys['ArrowLeft'],
+            right: this.keys['KeyD'] || this.keys['ArrowRight']
         };
 
-        // Apply input and save state
-        this.applyInput(input);
+        // Update physics with current input
+        const state = this.connection.applyInput(input);
         
-        // Store position for interpolation
-        this.positionBuffer.push({
-            timestamp: now,
-            x: this.worldPos.x,
-            y: this.worldPos.y,
-            rotation: this.rotation
-        });
-
-        // Keep buffer size in check
-        while (this.positionBuffer.length > this.maxBufferSize) {
-            this.positionBuffer.shift();
+        if (state) {
+            this.worldPos.x = state.x;
+            this.worldPos.y = state.y;
+            // Don't update rotation here since it's mouse-based
         }
-
-        this.pendingInputs.push(input);
-        
-        // Send movement data including current rotation
-        this.connection.sendMovementData(
-            this.worldPos.x,
-            this.worldPos.y,
-            this.rotation,
-            now
-        );
-
-        this.lastProcessedInputTime = now;
-
-        // Remove artificial delay between inputs
-        if (this.keys['KeyW'] || this.keys['KeyS'] || this.keys['KeyA'] || this.keys['KeyD']) {
-            this.applyInput({
-                sequenceNumber: this.inputSequenceNumber++,
-                timestamp: now,
-                keys: { ...this.keys },
-                dt: deltaTime
-            });
-        }
-
-        // Store position for interpolation only if needed
-        if (this.mountedModule) {
-            // ...existing interpolation code...
-        }
-
-        // Update grid target state
-        this.gridState.current = { ...this.gridState.target };
-        this.gridState.target = { x: this.worldPos.x, y: this.worldPos.y };
-        this.gridState.lastUpdate = now;
-
-        // Update ship target states
-        this.ships.forEach((ship, id) => {
-            if (!this.shipStates.has(id)) {
-                this.shipStates.set(id, {
-                    current: { x: ship.position.x, y: ship.position.y, rotation: ship.rotation },
-                    target: { x: ship.position.x, y: ship.position.y, rotation: ship.rotation },
-                    lastUpdate: now
-                });
-            }
-
-            const state = this.shipStates.get(id);
-            state.current = { ...state.target };
-            state.target = { 
-                x: ship.position.x, 
-                y: ship.position.y, 
-                rotation: ship.rotation 
-            };
-            state.lastUpdate = now;
-        });
     }
 
     applyInput(input) {
@@ -792,15 +730,15 @@ export class GameClient {
         this.worldPos.x += dx;
         this.worldPos.y += dy;
 
-        // Send update to server if moving
-        if (dx !== 0 || dy !== 0) {
-            this.connection.sendMovementData(
-                this.worldPos.x,
-                this.worldPos.y,
-                this.rotation,
-                performance.now()
-            );
-        }
+        // Movement data sending temporarily disabled
+        // if (dx !== 0 || dy !== 0) {
+        //     this.connection.sendMovementData(
+        //         this.worldPos.x,
+        //         this.worldPos.y,
+        //         this.rotation,
+        //         performance.now()
+        //     );
+        // }
     }
 
     sendInputToServer() {
@@ -830,12 +768,12 @@ export class GameClient {
             this.playerId
         );
 
-        // Send world position to server
-        this.connection.sendMovementData(
-            this.worldPos.x,
-            this.worldPos.y,
-            0
-        );
+        // Movement data sending temporarily disabled
+        // this.connection.sendMovementData(
+        //     this.worldPos.x,
+        //     this.worldPos.y,
+        //     0
+        // );
     }
 
     updateCoordinates() {
