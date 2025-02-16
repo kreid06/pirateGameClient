@@ -1,0 +1,29 @@
+export const MessageTypes = {
+    GAME_MSG_CONNECT: 0x21,
+    GAME_MSG_AUTH_RESPONSE: 0x24,
+    GAME_MSG_ERROR: 0x2F,
+    GAME_MSG_INPUT: 0x25,
+    GAME_MSG_WORLD_STATE: 0x30,
+    GAME_MSG_PLAYER_STATE: 0x31,
+    GAME_MSG_ENTITY_UPDATE: 0x32,
+    GAME_MSG_SPAWN: 0x33,
+    GAME_MSG_DESPAWN: 0x34,
+    GAME_MSG_DISCONNECT: 0x35
+};
+
+export const GameStates = {
+    NONE: 0x00,
+    VERIFYING: 0x01,
+    ACCEPTED: 0x02,
+    REJECTED: 0x03
+};
+
+export const ErrorCodes = {
+    NONE: 0x00,
+    AUTH: 0x01,
+    INVALID_TOKEN: 0x02,
+    DUPLICATE: 0x03,
+    TIMEOUT: 0x04,
+    PROTOCOL: 0x05,
+    SERVICE_UNAVAILABLE: 0x06
+};

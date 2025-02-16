@@ -1,9 +1,8 @@
 export class AuthService {
-    static API_URL = 'http://192.168.8.3:3000/api';
     static AUTH_ENDPOINTS = {
-        login: '/players/login',      // Updated from /auth/login
-        register: '/players/register', // Updated from /auth/register
-        logout: '/players/logout'      // Updated from /auth/logout
+        login: '/api/players/login',
+        register: '/api/players/register',
+        logout: '/api/players/logout'
     };
 
     // Add singleton pattern to prevent multiple instances
@@ -38,10 +37,13 @@ export class AuthService {
 
     async login(username, password) {
         try {
-            console.log('[Auth] Step 1: Calling auth server login endpoint');
-            const response = await fetch(`${AuthService.API_URL}${AuthService.AUTH_ENDPOINTS.login}`, {
+            console.log('[Auth] Attempting login...');
+            const response = await fetch(AuthService.AUTH_ENDPOINTS.login, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include',
                 body: JSON.stringify({ username, password })
             });
 
