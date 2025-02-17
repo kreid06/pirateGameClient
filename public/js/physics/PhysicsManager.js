@@ -1,4 +1,5 @@
-import { Engine, World, Bodies, Body } from 'matter-js';
+import { Engine, World, Bodies, Body, Composite } from 'matter-js';
+import { GAME_CONSTANTS } from '../core/constants.js';
 
 export class PhysicsManager {
     constructor() {
@@ -9,89 +10,96 @@ export class PhysicsManager {
         
         this.world = this.engine.world;
         this.world.gravity.y = 0;
-        this.playerBody = null;
+        this.bodies = new Map();
         this.lastUpdateTime = performance.now();
-        this.updateRate = 1000 / 60;
-        this.pendingInputs = [];
-        this.serverLatency = 0;
+        this.updateRate = 1000 / 60;  // 60 FPS
+
+        // Collision handling
+        Engine.run(this.engine);
+        this.setupCollisionHandlers();
     }
 
-    createPlayerBody() {
-        const body = Bodies.circle(0, 0, 20, {
+    setupCollisionHandlers() {
+        const runner = this.engine.runner;
+        Events.on(this.engine, 'collisionStart', (event) => {
+            event.pairs.forEach((pair) => {
+                console.log('[Physics] Collision between:', pair.bodyA.label, 'and', pair.bodyB.label);
+            });
+        });
+    }
+
+    createPlayerBody(x = 0, y = 0) {
+        const body = Bodies.circle(x, y, 20, {
             friction: 0.1,
-            restitution: 0.6,
-            density: 0.1,
+            frictionAir: 0.02,
             mass: 80,
-            inertia: Infinity,
             label: 'player'
         });
+
         World.add(this.world, body);
-        this.playerBody = body;
+        this.bodies.set('player', body);
         return body;
     }
 
-    update() {
-        const now = performance.now();
-        const dt = now - this.lastUpdateTime;
-        
-        if (dt >= this.updateRate) {
-            Engine.update(this.engine, this.updateRate);
-            this.lastUpdateTime = now;
-            return this.getState();
-        }
-        return null;
+    createShipBody(ship) {
+        // Create ship hull using vertices that match the render path
+        const vertices = [
+            { x: 225, y: 90 },
+            { x: 500, y: 0 },
+            { x: 225, y: -90 },
+            { x: -225, y: -90 },
+            { x: -325, y: 0 },
+            { x: -225, y: 90 }
+        ];
+
+        const body = Bodies.fromVertices(ship.position.x, ship.position.y, [vertices], {
+            isStatic: true,  // Ships don't move for now
+            friction: 0.1,
+            label: `ship_${ship.id}`,
+            angle: ship.rotation
+        });
+
+        World.add(this.world, body);
+        this.bodies.set(ship.id, body);
+        return body;
     }
 
-    applyInput(input) {
-        if (!this.playerBody) return;
-        const force = 0.005;
-        const impulse = { x: 0, y: 0 };
+    updateBodies(gameState) {
+        // Update player position from physics simulation
+        const playerBody = this.bodies.get('player');
+        if (playerBody && gameState.worldPos) {
+            gameState.worldPos.x = playerBody.position.x;
+            gameState.worldPos.y = playerBody.position.y;
+            gameState.rotation = playerBody.angle;
+        }
 
-        if (input.keys['KeyW']) impulse.y -= force;
-        if (input.keys['KeyS']) impulse.y += force;
-        if (input.keys['KeyA']) impulse.x -= force;
-        if (input.keys['KeyD']) impulse.x += force;
+        // Update any other bodies as needed
+        gameState.ships.forEach(ship => {
+            if (!this.bodies.has(ship.id)) {
+                this.createShipBody(ship);
+            }
+        });
+    }
 
-        Body.applyForce(this.playerBody, this.playerBody.position, impulse);
-        return { impulse, position: { ...this.playerBody.position } };
+    update(deltaTime) {
+        Engine.update(this.engine, deltaTime);
+        return this.getState();
     }
 
     getState() {
-        if (!this.playerBody) return null;
+        const playerBody = this.bodies.get('player');
+        if (!playerBody) return null;
+
         return {
-            x: this.playerBody.position.x,
-            y: this.playerBody.position.y,
-            angle: this.playerBody.angle,
-            velocity: { ...this.playerBody.velocity }
+            x: playerBody.position.x,
+            y: playerBody.position.y,
+            angle: playerBody.angle,
+            velocity: playerBody.velocity
         };
     }
 
-    reconcileState(serverState) {
-        if (!this.playerBody) return;
-        
-        const threshold = 50;
-        const currentPos = this.playerBody.position;
-        const deviation = Math.hypot(
-            currentPos.x - serverState.x,
-            currentPos.y - serverState.y
-        );
-
-        if (deviation > threshold) {
-            Body.setPosition(this.playerBody, {
-                x: serverState.x,
-                y: serverState.y
-            });
-            Body.setAngle(this.playerBody, serverState.angle);
-            this.pendingInputs = [];
-            return true;
-        }
-        return false;
-    }
-
     cleanup() {
-        if (this.engine) {
-            World.clear(this.world);
-            Engine.clear(this.engine);
-        }
+        World.clear(this.world);
+        Engine.clear(this.engine);
     }
 }

@@ -1,15 +1,15 @@
 export class InputManager {
     constructor() {
+        this.pendingInputs = new Set();
+        this.lastInputTime = 0;
+        this.sequenceNumber = 0;
         this.inputs = new Map();
         this.keyStates = new Map();
-        this.sequenceNumber = 0;
-        this.lastInputTime = performance.now();
         this.inputBuffer = [];
         this.maxBufferSize = 64;
         this.inputDelay = 50; // 50ms input delay for smoothing
 
         // Add input response tracking
-        this.pendingInputs = new Map();
         this.lastAcknowledgedInput = 0;
         
         // Add input prediction
@@ -19,6 +19,9 @@ export class InputManager {
             rotation: 0,
             velocity: { x: 0, y: 0 }
         };
+
+        this.lastProcessedInput = 0;
+        this.predictionState = null;
 
         this.setupKeyHandlers();
     }
@@ -56,7 +59,7 @@ export class InputManager {
         };
 
         // Store input for prediction
-        this.pendingInputs.set(input.sequence, input);
+        this.pendingInputs.add(input);
         this.inputBuffer.push(input);
 
         // Keep buffer size in check
@@ -69,15 +72,15 @@ export class InputManager {
     }
 
     clearInputsBefore(sequence) {
-        this.pendingInputs.forEach((input, seq) => {
-            if (seq <= sequence) {
-                this.pendingInputs.delete(seq);
+        this.pendingInputs.forEach((input) => {
+            if (input.sequence <= sequence) {
+                this.pendingInputs.delete(input);
             }
         });
     }
 
     getUnacknowledgedInputs() {
-        return Array.from(this.pendingInputs.values())
+        return Array.from(this.pendingInputs)
             .filter(input => input.sequence > this.lastAcknowledgedInput)
             .sort((a, b) => a.sequence - b.sequence);
     }
@@ -100,12 +103,12 @@ export class InputManager {
     }
 
     reset() {
+        this.pendingInputs.clear();
+        this.lastInputTime = 0;
         this.inputs.clear();
         this.keyStates.clear();
-        this.pendingInputs.clear();
         this.inputBuffer = [];
         this.sequenceNumber = 0;
-        this.lastInputTime = performance.now();
         this.lastAcknowledgedInput = 0;
     }
 
@@ -113,6 +116,7 @@ export class InputManager {
         window.removeEventListener('keydown', this.handleKeyChange);
         window.removeEventListener('keyup', this.handleKeyChange);
         this.reset();
+        this.predictionState = null;
     }
 
     processServerUpdate(serverTime) {
@@ -124,7 +128,7 @@ export class InputManager {
         this.serverTimeOffset = performance.now() - serverTime;
         
         // Process any queued inputs that happened after server time
-        this.pendingInputs.forEach((input, sequence) => {
+        this.pendingInputs.forEach((input) => {
             if (input.timestamp > serverTime) {
                 // Keep this input for next prediction
                 this.predictedState = this.applyInputToState(
@@ -133,9 +137,12 @@ export class InputManager {
                 );
             } else {
                 // Input is old, we can remove it
-                this.pendingInputs.delete(sequence);
+                this.pendingInputs.delete(input);
             }
         });
+
+        // Process server reconciliation
+        // ... existing code ...
     }
 
     applyInputToState(state, input) {
@@ -148,5 +155,16 @@ export class InputManager {
         if (input.keys['KeyD']) newState.x += speed * input.dt;
         
         return newState;
+    }
+
+    addInput(input) {
+        input.sequence = this.sequenceNumber++;
+        input.timestamp = Date.now();
+        this.pendingInputs.add(input);
+        this.lastInputTime = input.timestamp;
+    }
+
+    getPendingInputs() {
+        return Array.from(this.pendingInputs);
     }
 }

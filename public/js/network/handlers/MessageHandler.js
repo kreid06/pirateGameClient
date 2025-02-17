@@ -10,24 +10,41 @@ export class MessageHandler {
     }
 
     handle(event) {
-        if (!(event.data instanceof ArrayBuffer)) {
-            console.warn('[MessageHandler] Received non-binary message');
-            return;
-        }
-
-        const view = new DataView(event.data);
-        const msgType = view.getUint8(0);
-
         try {
-            const handler = this.handlers.get(msgType);
-            if (handler) {
-                handler(event.data);
-            } else {
-                console.warn(`[MessageHandler] No handler for message type: 0x${msgType.toString(16)}`);
+            const view = new DataView(event.data);
+            const messageType = view.getUint8(0);
+
+            switch (messageType) {
+                case MessageTypes.GAME_MSG_AUTH_CHALLENGE:
+                    this.handleAuthChallenge();
+                    break;
+                case MessageTypes.GAME_MSG_AUTH_SUCCESS:
+                    this.handleAuthSuccess(view);
+                    break;
+                // ... other message handlers ...
+                default:
+                    if (!(event.data instanceof ArrayBuffer)) {
+                        console.warn('[MessageHandler] Received non-binary message');
+                        return;
+                    }
+
+                    const msgType = view.getUint8(0);
+
+                    try {
+                        const handler = this.handlers.get(msgType);
+                        if (handler) {
+                            handler(event.data);
+                        } else {
+                            console.warn(`[MessageHandler] No handler for message type: 0x${msgType.toString(16)}`);
+                        }
+                    } catch (error) {
+                        console.error('[MessageHandler] Error handling message:', error);
+                        this.connection.handleError(error, 'MESSAGE_HANDLING_ERROR');
+                    }
+                    break;
             }
         } catch (error) {
-            console.error('[MessageHandler] Error handling message:', error);
-            this.connection.handleError(error, 'MESSAGE_HANDLING_ERROR');
+            console.error('[MessageHandler] Error:', error);
         }
     }
 
