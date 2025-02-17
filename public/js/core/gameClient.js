@@ -38,6 +38,12 @@ export class GameClient {
             this.renderSystem.handleResize();
         });
 
+        window.addEventListener('toggleDebugDraw', () => {
+            if (this.renderSystem) {
+                this.renderSystem.toggleDebugDraw();
+            }
+        });
+
         // Comment out server connection code for testing
         /*
         window.addEventListener('startGame', () => {

@@ -38,11 +38,18 @@ export class RenderSystem {
             center: { x: window.innerWidth / 2, y: window.innerHeight / 2 }
         };
 
+        this.debugDraw = false;
+
         console.log('[Render] Initialized with viewport:', {
             width: this.viewport.width,
             height: this.viewport.height,
             center: this.viewport.center
         });
+    }
+
+    toggleDebugDraw() {
+        this.debugDraw = !this.debugDraw;
+        console.log('[Render] Debug drawing:', this.debugDraw ? 'enabled' : 'disabled');
     }
 
     queueForRendering(object, layer, zIndex = 0) {
@@ -182,6 +189,14 @@ export class RenderSystem {
         
         // Process render queue
         this.processRenderQueue();
+
+        // Draw physics bodies if debug mode is enabled
+        if (this.debugDraw) {
+            const bodies = gameState.physicsManager.bodies;
+            bodies.forEach(body => {
+                this.drawPhysicsBody(this.ctx, body);
+            });
+        }
         
         // Restore context state
         this.ctx.restore();
@@ -237,6 +252,52 @@ export class RenderSystem {
             this.viewport.width,
             this.viewport.height
         );
+        ctx.restore();
+    }
+
+    drawPhysicsBody(ctx, body) {
+        ctx.save();
+        ctx.strokeStyle = '#FF0000';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5;
+
+        // Draw collision shape using actual body vertices
+        ctx.beginPath();
+        const vertices = body.vertices;
+        ctx.moveTo(vertices[0].x, vertices[0].y);
+        for (let i = 1; i < vertices.length; i++) {
+            ctx.lineTo(vertices[i].x, vertices[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        // Draw debug points
+        ctx.fillStyle = '#00FF00';
+        vertices.forEach((vertex, index) => {
+            ctx.beginPath();
+            ctx.arc(vertex.x, vertex.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillText(index, vertex.x + 5, vertex.y + 5);
+        });
+
+        // Draw center of mass and position
+        ctx.beginPath();
+        ctx.arc(body.position.x, body.position.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#0000FF';
+        ctx.fill();
+
+        // Draw velocity vector if moving
+        if (body.velocity && (body.velocity.x !== 0 || body.velocity.y !== 0)) {
+            ctx.beginPath();
+            ctx.moveTo(body.position.x, body.position.y);
+            ctx.lineTo(
+                body.position.x + body.velocity.x * 10,
+                body.position.y + body.velocity.y * 10
+            );
+            ctx.strokeStyle = '#0000FF';
+            ctx.stroke();
+        }
+
         ctx.restore();
     }
 

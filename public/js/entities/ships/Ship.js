@@ -66,9 +66,9 @@ export class Ship {
     }
 
     render(ctx) {
-        // Base ship rendering
         ctx.save();
-        ctx.translate(this.position.x, this.position.y);
+        // Apply visual offset to match physics body (-25px total offset)
+        ctx.translate(this.position.x - 25, this.position.y);
         ctx.rotate(this.rotation);
         this.drawHull(ctx);
         ctx.restore();
@@ -103,7 +103,8 @@ export class Brigantine extends Ship {
 
     render(ctx) {
         ctx.save();
-        ctx.translate(this.position.x, this.position.y);
+        // Apply visual offset to match physics body (-25px total offset)
+        ctx.translate(this.position.x - 25, this.position.y);
         ctx.rotate(this.rotation);
         
         // Render in layers

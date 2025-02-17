@@ -1,4 +1,5 @@
 import { Brigantine } from '../entities/ships/Ship.js';
+import { PhysicsManager } from '../physics/PhysicsManager.js';
 
 export class GameState {
     constructor() {
@@ -9,18 +10,18 @@ export class GameState {
         this.otherPlayers = new Map();
         this.lastUpdateTime = performance.now();
         
-        // Physics properties
+        // Adjust physics properties for better control
         this.physics = {
-            // Tune these values for desired feel
-            maxSpeed: 300,
-            acceleration: 1000,
-            deceleration: 0.92,
-            rotationSpeed: 0.1,
-            mass: 1,
-            force: {
-                x: 0,
-                y: 0
-            }
+            maxForce: 1,             // Increased base force
+            acceleration: 0.1,        // More responsive acceleration
+            deceleration: 0.98,      // Slight deceleration
+            maxSpeed: 2,            // Maximum speed limit
+            turnSpeed: 0.05,         // Rotation speed
+            // Movement multipliers
+            forward: 1.0,            // Full power forward
+            backward: 0.5,           // Half power backward
+            strafe: 0.7,             // 70% power for strafing
+            force: { x: 0, y: 0 }
         };
 
         this.velocity = { x: 0, y: 0 };
@@ -77,33 +78,47 @@ export class GameState {
             this.rotation = this.calculateRotation(input.mousePos);
         }
 
-        // Calculate movement force based on input
-        const force = { x: 0, y: 0 };
-        const acceleration = this.physics.acceleration;
+        // Get player physics body
+        const playerBody = this.physicsManager.bodies.get('player');
+        if (!playerBody) return;
+
+        // Calculate force vector
+        let force = { x: 0, y: 0 };
 
         if (input.forward || input.backward || input.strafeLeft || input.strafeRight) {
-            // Forward/Backward force along rotation
             if (input.forward) {
-                force.x += Math.cos(this.rotation) * acceleration;
-                force.y += Math.sin(this.rotation) * acceleration;
+                force.x += Math.cos(this.rotation) * this.physics.maxForce * this.physics.forward;
+                force.y += Math.sin(this.rotation) * this.physics.maxForce * this.physics.forward;
             }
             if (input.backward) {
-                force.x -= Math.cos(this.rotation) * acceleration * 0.7; // Slower backward movement
-                force.y -= Math.sin(this.rotation) * acceleration * 0.7;
+                force.x -= Math.cos(this.rotation) * this.physics.maxForce * this.physics.backward;
+                force.y -= Math.sin(this.rotation) * this.physics.maxForce * this.physics.backward;
             }
-
-            // Strafe force perpendicular to rotation
             if (input.strafeLeft) {
-                force.x -= Math.cos(this.rotation + Math.PI/2) * acceleration * 0.8;
-                force.y -= Math.sin(this.rotation + Math.PI/2) * acceleration * 0.8;
+                force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
+                force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
             }
             if (input.strafeRight) {
-                force.x += Math.cos(this.rotation + Math.PI/2) * acceleration * 0.8;
-                force.y += Math.sin(this.rotation + Math.PI/2) * acceleration * 0.8;
+                force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
+                force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
             }
 
-            // Apply the calculated force
-            this.applyForce(force);
+            // Scale force based on speed
+            const currentSpeed = Math.sqrt(playerBody.velocity.x ** 2 + playerBody.velocity.y ** 2);
+            if (currentSpeed > this.physics.maxSpeed) {
+                const scale = this.physics.maxSpeed / currentSpeed;
+                force.x *= scale;
+                force.y *= scale;
+            }
+
+            // Apply the force with debug logging
+            console.log('[Physics] Applying force:', {
+                force,
+                currentSpeed,
+                position: this.worldPos,
+                rotation: this.rotation
+            });
+            this.physicsManager.applyForce(playerBody, force);
         }
     }
 
@@ -111,36 +126,16 @@ export class GameState {
         // Update physics first
         this.physicsManager.update(deltaTime);
         
-        // Update positions from physics simulation
-        this.physicsManager.updateBodies(this);
-
-        const dt = deltaTime * 0.001; // Convert to seconds
-
-        // Apply physics
-        // Update velocity
-        this.velocity.x *= this.physics.deceleration;
-        this.velocity.y *= this.physics.deceleration;
-
-        // Clamp velocity to max speed
-        const currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
-        if (currentSpeed > this.physics.maxSpeed) {
-            const scale = this.physics.maxSpeed / currentSpeed;
-            this.velocity.x *= scale;
-            this.velocity.y *= scale;
+        // Get updated positions from physics
+        const physicsState = this.physicsManager.getState();
+        if (physicsState) {
+            this.worldPos.x = physicsState.x;
+            this.worldPos.y = physicsState.y;
+            // Only update rotation from input, not physics
         }
 
-        // Update position based on velocity and delta time
-        this.worldPos.x += this.velocity.x * dt;
-        this.worldPos.y += this.velocity.y * dt;
-
-        // Log physics state for debugging
-        console.log('[Physics] State:', {
-            pos: { x: Math.round(this.worldPos.x), y: Math.round(this.worldPos.y) },
-            vel: { x: Math.round(this.velocity.x), y: Math.round(this.velocity.y) },
-            speed: Math.round(currentSpeed)
-        });
-
-        this.lastUpdateTime = performance.now();
+        // Update physics bodies with new state
+        this.physicsManager.updateBodies(this);
     }
 
     updatePlayer(position, rotation) {

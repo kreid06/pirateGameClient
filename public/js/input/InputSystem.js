@@ -3,16 +3,26 @@ export class InputSystem {
         this.keys = new Set();
         this.mousePos = { x: 0, y: 0 };
         this.worldMousePos = { x: 0, y: 0 };
+        this.debugKeyPressed = false;
         this.setupListeners();
     }
 
     setupListeners() {
         window.addEventListener('keydown', (e) => {
             this.keys.add(e.code);
+            
+            // Toggle debug draw on 'T' press
+            if (e.code === 'KeyT' && !this.debugKeyPressed) {
+                this.debugKeyPressed = true;
+                window.dispatchEvent(new CustomEvent('toggleDebugDraw'));
+            }
         });
 
         window.addEventListener('keyup', (e) => {
             this.keys.delete(e.code);
+            if (e.code === 'KeyT') {
+                this.debugKeyPressed = false;
+            }
         });
 
         window.addEventListener('mousemove', (e) => {
