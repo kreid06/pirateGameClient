@@ -36,12 +36,17 @@ export class CollisionSystem {
             },
             BOARDED_PLAYER: {
                 category: this.categories.BOARDED_PLAYER,
-                mask: this.categories.SHIP_DETECT,
+                mask: this.categories.SHIP_DETECT,  // Can only detect ship sensors
                 group: this.groups.BOARDED_PLAYERS  // Mounted players don't collide
             },
             SHIP_DETECT: {
                 category: this.categories.SHIP_DETECT,
                 mask: this.categories.PLAYER_JUMPED | this.categories.BOARDED_PLAYER,
+                group: this.groups.NONE
+            },
+            SHIP_SENSOR: {
+                category: this.categories.SHIP_DETECT,
+                mask: this.categories.BOARDED_PLAYER | this.categories.PLAYER_JUMPED,  // Detects both boarded and jumping players
                 group: this.groups.NONE
             }
         };
@@ -97,23 +102,11 @@ export class CollisionSystem {
     }
 
     debugCollisionState() {
-        console.log('[Collision] Active collisions:', {
-            count: this.collisions.size,
-            collisions: Array.from(this.collisions.values()).map(c => ({
-                type: c.type,
-                bodyA: c.bodyA.label,
-                bodyB: c.bodyB.label,
-                duration: Date.now() - c.startTime
-            }))
-        });
+  
+     
 
-        console.log('[Collision] Groups:', {
-            bodies: Array.from(this.bodies.values()).map(b => ({
-                label: b.label,
-                group: b.collisionFilter?.group,
-                willCollide: this.willBodiesCollide.bind(this)
-            }))
-        });
+   
+       
     }
 
     willBodiesCollide(bodyA, bodyB) {

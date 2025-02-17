@@ -64,7 +64,7 @@ export class Hud {
     getPlayerStatus() {
         const state = this.state.playerState;
         if (state.isJumping) return '🦘 JUMPING';
-        if (state.isMounted) return '⚓ ON SHIP';
+        if (state.isBoarded) return '⚓ BOARDED';  // Updated text
         return '🏃 GROUNDED';
     }
 

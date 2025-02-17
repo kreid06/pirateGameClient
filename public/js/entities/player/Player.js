@@ -44,14 +44,16 @@ export class Player {
         // Player state
         this.state = {
             isJumping: false,
-            isMounted: false,
+            isBoarded: false,  // renamed from isMounted
             jumpVelocity: { x: 0, y: 0 },
             jumpStartPos: null,
             jumpDuration: 500,
             jumpCooldown: 500,
             lastJumpTime: 0,
-            mountedShip: null,
-            currentCollisionCategory: 'PLAYER'
+            boardedShip: null,  // renamed from mountedShip
+            currentCollisionCategory: 'PLAYER',
+            lastShipDetection: 0,  // Add timestamp for ship detection
+            shipDetectionTimeout: 1000  // 1 second timeout
         };
 
         this.init();
@@ -138,6 +140,20 @@ export class Player {
     update(deltaTime) {
         if (!this.physicsBody) return;
 
+        // Add debug logging for collision categories and groups
+        if (this.stats?.frameCount % 60 === 0) { // Log every second
+            console.log('[Player] Collision state:', {
+                category: this.physicsBody.collisionFilter?.category?.toString(16),
+                group: this.physicsBody.collisionFilter?.group,
+                mask: this.physicsBody.collisionFilter?.mask?.toString(16),
+                state: {
+                    isJumping: this.state.isJumping,
+                    isBoarded: this.state.isBoarded,
+                    currentCategory: this.state.currentCollisionCategory
+                }
+            });
+        }
+
         // Verify physics body is still in world
         const isInWorld = this.physicsManager.world.bodies.includes(this.physicsBody);
         if (!isInWorld) {
@@ -156,6 +172,20 @@ export class Player {
         if (this.state.currentCollisionCategory && this.physicsManager?.collisionSystem) {
             this.physicsBody.collisionFilter = 
                 this.physicsManager.collisionSystem.getCollisionFilter(this.state.currentCollisionCategory);
+        }
+
+        // Check if we've lost contact with the ship
+        if (this.state.isBoarded) {
+            const now = Date.now();
+            // Only check sensor collisions for ship detection
+            const shipSensor = this.findShipSensor();
+            
+            if (shipSensor) {
+                this.state.lastShipDetection = now;
+            } else if (now - this.state.lastShipDetection > this.state.shipDetectionTimeout) {
+                console.log('[Player] Lost contact with ship sensor, falling off');
+                this.unboardShip();
+            }
         }
 
         // Debug: Remove auto jump end check
@@ -179,9 +209,9 @@ export class Player {
                 fillStyle: `rgba(50, 205, 50, ${progress})`,  // Green with fading alpha
                 strokeStyle: `rgba(34, 139, 34, ${progress})`  // Darker green with fading alpha
             };
-        } else if (this.state.isMounted) {
+        } else if (this.state.isBoarded) {  // Update condition name
             this.visualState = {
-                fillStyle: '#4169E1',    // Blue when mounted
+                fillStyle: '#4169E1',    // Blue when boarded
                 strokeStyle: '#0000CD'
             };
         } else {
@@ -280,7 +310,7 @@ export class Player {
         ctx.fill();
 
         // Debug: Draw boarding check point
-        if (this.state.isJumping || this.state.isMounted) {
+        if (this.state.isJumping || this.state.isBoarded) {
             const checkPoint = {
                 x: this.position.x,
                 y: this.position.y + this.physics.radius + 1
@@ -309,16 +339,18 @@ export class Player {
         if (this.physicsBody) {
             Body.set(this.physicsBody, 'collisionFilter', filter);
             
+            // Enhanced logging with group information
             console.log('[Player] Collision category changed:', {
                 from: oldCategory,
                 to: newCategory,
                 filter: {
-                    category: filter.category,
-                    mask: filter.mask
+                    category: filter.category?.toString(16),
+                    mask: filter.mask?.toString(16),
+                    group: filter.group
                 },
                 state: {
                     isJumping: this.state.isJumping,
-                    isMounted: this.state.isMounted
+                    isBoarded: this.state.isBoarded
                 }
             });
         }
@@ -394,14 +426,14 @@ export class Player {
         if (shipCollision) {
             this.boardShip(shipCollision);
         } else {
-            // this.returnToNormalState();
+            this.returnToNormalState();
         }
     }
 
     returnToNormalState() {
         console.log('[Player] Returning to normal state');
         this.state.isJumping = false;
-        this.state.isMounted = false;
+        this.state.isBoarded = false;
         this.setCollisionCategory('PLAYER');
     }
 
@@ -446,6 +478,11 @@ export class Player {
         return collisions.find(body => body?.label?.startsWith('ship_sensor'));
     }
 
+    findShipSensor() {
+        const collisions = this.physicsManager.collisionSystem.getCollisionsForBody(this.physicsBody);
+        return collisions.find(body => body?.label?.startsWith('ship_sensor'));
+    }
+
     boardShip(shipBody) {
         console.log('[Player] Boarding ship:', {
             shipId: shipBody.label,
@@ -453,7 +490,17 @@ export class Player {
         });
 
         this.state.isJumping = false;
-        this.state.isMounted = true;
+        this.state.isBoarded = true;
+        this.state.boardedShip = shipBody;
+        this.state.lastShipDetection = Date.now();
         this.setCollisionCategory('BOARDED_PLAYER');
+    }
+
+    unboardShip() {
+        console.log('[Player] Unboarding ship');
+        this.state.isBoarded = false;
+        this.state.boardedShip = null;
+        this.state.lastShipDetection = 0;
+        this.returnToNormalState();
     }
 }

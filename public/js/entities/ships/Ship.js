@@ -143,11 +143,11 @@ export class Ship {
                 angle: this.rotation,
                 label: `ship_sensor_${this.id}`,
                 isStatic: true,
-                isSensor: false,  // This one is always a sensor
+                isSensor: true,  // This one is always a sensor
                 collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_SENSOR'),
                 plugin: {
                     ship: this,
-                    isShipSensor: false
+                    isShipSensor: true
                 }
             }
         );

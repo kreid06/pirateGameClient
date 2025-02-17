@@ -116,12 +116,7 @@ export class PhysicsManager {
 
         // Debug force application
         if (Math.floor(this.engine.timing.timestamp / 1000) % 1 === 0) {
-            console.log('[Physics] Force applied:', {
-                bodyId: body.id,
-                force,
-                velocity: body.velocity,
-                position: body.position
-            });
+    
         }
     }
 
