@@ -63,20 +63,26 @@ export class Hud {
 
     getPlayerStatus() {
         const state = this.state.playerState;
-        // if (state.isJumping) return '🦘 JUMPING';
-        // if (state.isMounted) return '⚓ ON SHIP';
-        // return '🏃 GROUNDED';
+        if (state.isJumping) return '🦘 JUMPING';
+        if (state.isMounted) return '⚓ ON SHIP';
+        return '🏃 GROUNDED';
     }
 
     getJumpStatus() {
         const state = this.state.playerState;
         const now = Date.now();
-        // const timeLeft = Math.max(0, state.lastJumpTime + state.jumpCooldown - now);
+        const timeLeft = Math.max(0, state.lastJumpTime + state.jumpCooldown - now);
         
-        // if (state.isJumping) return 'JUMPING';
-        // if (state.isMounted) return 'MOUNTED';
-        // if (timeLeft > 0) return `${Math.ceil(timeLeft / 100) / 10}s`;
-        return 'READY';
+        if (state.isJumping) {
+            // Calculate remaining jump time
+            const jumpTimeLeft = Math.max(0, 
+                (state.lastJumpTime + state.jumpDuration) - now);
+            return `JUMP: ${(jumpTimeLeft / 1000).toFixed(1)}s`;
+        }
+        
+        if (state.isMounted) return 'MOUNTED';
+        if (timeLeft > 0) return `COOLDOWN: ${(timeLeft / 1000).toFixed(1)}s`;
+        return 'JUMP READY';
     }
 
     updateServerTime(serverTime) {

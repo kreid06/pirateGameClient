@@ -72,7 +72,9 @@ export class GameClient {
         });
 
         window.addEventListener('playerJump', () => {
-            // this.state.handleJump();
+            if (this.gameState?.player) {
+                this.gameState.player.startJump();
+            }
         });
 
         // Comment out server connection code for testing

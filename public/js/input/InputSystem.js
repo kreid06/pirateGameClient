@@ -46,6 +46,16 @@ export class InputSystem {
             this.mousePos.y = e.clientY;
             // worldMousePos is updated in getInput when we have the camera position
         });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                const now = Date.now();
+                if (now - this.lastJumpTime >= this.jumpCooldown) {
+                    this.lastJumpTime = now;
+                    window.dispatchEvent(new CustomEvent('playerJump'));
+                }
+            }
+        });
     }
 
     getInput(playerPos, viewport) {

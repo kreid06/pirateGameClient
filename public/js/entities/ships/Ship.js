@@ -114,56 +114,126 @@ export class Ship {
             "-225 90"    // Stern top
         ].join(' '));
 
-        // Create ship hull with proper rotation
+        // Create main physical hull
         this.physicsBody = Bodies.fromVertices(
             this.position.x, 
             this.position.y, 
             [hullVertices],
             {
-                angle: this.rotation,  // Apply initial rotation
+                angle: this.rotation,
                 label: `ship_hull_${this.id}`,
                 isStatic: true,
+                isSensor: false,
                 friction: 0.1,
-                restitution: 0.2
+                restitution: 0.2,
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_HULL'),
+                plugin: {
+                    ship: this,
+                    isShipHull: true
+                }
             }
         );
 
-        // Set initial rotation for mount sensor and deck
-        const mountSensorOptions = {
-            angle: this.rotation,
-            label: `ship_mount_${this.id}`,
-            isSensor: true,
-            isStatic: true,
-            plugin: { ship: this }  // Reference to ship for collision handling
-        };
-
-        this.mountSensor = Bodies.rectangle(
+        // Create sensor duplicate with same shape
+        this.sensorHull = Bodies.fromVertices(
             this.position.x, 
-            this.position.y,
-            450, 200, 
-            mountSensorOptions
+            this.position.y, 
+            [hullVertices],
+            {
+                angle: this.rotation,
+                label: `ship_sensor_${this.id}`,
+                isStatic: true,
+                isSensor: false,  // This one is always a sensor
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_SENSOR'),
+                plugin: {
+                    ship: this,
+                    isShipSensor: false
+                }
+            }
         );
+
+        // Add both bodies to physics world
+        physicsManager.addBody(`${this.id}_hull`, this.physicsBody);
+        physicsManager.addBody(`${this.id}_sensor`, this.sensorHull);
+
+        // Rotate both bodies
+        Body.setAngle(this.physicsBody, this.rotation);
+        Body.setAngle(this.sensorHull, this.rotation);
+
+        // Log ship hull creation
+        console.log('[Ship] Created hull:', {
+            id: this.id,
+            isSensor: this.physicsBody.isSensor,
+            category: this.physicsBody.collisionFilter.category,
+            mask: this.physicsBody.collisionFilter.mask
+        });
+
+        // Remove jump detector code and just use the main hull
+        physicsManager.addBody(`${this.id}_hull`, this.physicsBody);
+
 
         // Rotate all bodies to match ship rotation
         Body.setAngle(this.physicsBody, this.rotation);
-        Body.setAngle(this.mountSensor, this.rotation);
 
         // Add bodies to physics world with collision callbacks
         physicsManager.addBody(`${this.id}_hull`, this.physicsBody, {
             onCollide: (pair) => this.handleCollision(pair)
         });
-        physicsManager.addBody(`${this.id}_mount`, this.mountSensor, {
-            onCollide: (pair) => this.handleMountSensor(pair)
-        });
+     
+        // Create boarding boundary (hollow square)
+        // const boundaryWidth = 400;
+        // const boundaryHeight = 300;
+        // const wallThickness = 10;
+
+        // // Create four walls for the boundary
+        // const walls = [
+        //     // Top wall
+        //     Bodies.rectangle(0, -boundaryHeight/2, boundaryWidth, wallThickness),
+        //     // Bottom wall
+        //     Bodies.rectangle(0, boundaryHeight/2, boundaryWidth, wallThickness),
+        //     // Left wall
+        //     Bodies.rectangle(-boundaryWidth/2, 0, wallThickness, boundaryHeight),
+        //     // Right wall
+        //     Bodies.rectangle(boundaryWidth/2, 0, wallThickness, boundaryHeight)
+        // ];
+
+        // // Create compound body for boundary
+        // this.boardingBoundary = Body.create({
+        //     parts: walls,
+        //     position: this.position,
+        //     angle: this.rotation,
+        //     isStatic: true,
+        //     label: `boarding_boundary_${this.id}`,
+        //     collisionFilter: physicsManager.collisionSystem.getCollisionFilter('BOARDED_BOUNDARY')
+        // });
+
+        // // Add bodies to physics world
+        // physicsManager.addBody(`${this.id}_boundary`, this.boardingBoundary);
     }
 
     handleCollision(pair) {
         const otherBody = pair.bodyA === this.physicsBody ? pair.bodyB : pair.bodyA;
+        const isSensor = this.physicsManager.collisionSystem.isSensorCollision(this.physicsBody, otherBody);
         
-        if (otherBody.label.startsWith('player')) {
-            console.log('[Ship] Collision with player:', {
+        console.log('[Ship] Collision detected:', {
+            shipId: this.id,
+            otherId: otherBody.label,
+            isSensor,
+            category: otherBody.collisionFilter?.category
+        });
+
+        if (isSensor && otherBody.label.startsWith('player')) {
+            this.handleJumpingPlayerDetection(otherBody);
+        }
+    }
+
+    handleJumpingPlayerDetection(playerBody) {
+        if (playerBody.collisionFilter.category === this.physicsManager.collisionSystem.categories.PLAYER_JUMPED) {
+            console.log('[Ship] Detected jumping player:', {
                 shipId: this.id,
-                bodyLabel: otherBody.label
+                playerId: playerBody.label,
+                playerPos: playerBody.position,
+                shipPos: this.position
             });
         }
     }
@@ -223,6 +293,27 @@ export class Ship {
             ctx.fill();
         }
 
+        // Render boarding boundary if it exists
+        if (this.boardingBoundary?.parts) {
+            ctx.strokeStyle = '#0000FF';  // Blue for boarding boundary
+            ctx.fillStyle = 'rgba(0, 0, 255, 0.1)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+
+            this.boardingBoundary.parts.forEach(part => {
+                if (!part.vertices) return;
+                
+                ctx.beginPath();
+                const vertices = part.vertices;
+                ctx.moveTo(vertices[0].x, vertices[0].y);
+                for (let i = 1; i < vertices.length; i++) {
+                    ctx.lineTo(vertices[i].x, vertices[i].y);
+                }
+                ctx.closePath();
+                ctx.stroke();
+            });
+        }
+
         ctx.restore();
     }
 
@@ -250,6 +341,40 @@ export class Ship {
         });
 
         ctx.restore();
+    }
+
+    // Update both bodies' positions when ship moves
+    setPosition(x, y) {
+        if (this.physicsBody) {
+            Body.setPosition(this.physicsBody, { x, y });
+        }
+        if (this.sensorHull) {
+            Body.setPosition(this.sensorHull, { x, y });
+        }
+        this.position = { x, y };
+    }
+
+    // Update both bodies' angles when ship rotates
+    setRotation(angle) {
+        if (this.physicsBody) {
+            Body.setAngle(this.physicsBody, angle);
+        }
+        if (this.sensorHull) {
+            Body.setAngle(this.sensorHull, angle);
+        }
+        this.rotation = angle;
+    }
+
+    // Clean up both bodies
+    cleanup() {
+        if (this.physicsManager) {
+            if (this.physicsBody) {
+                this.physicsManager.removeBody(`${this.id}_hull`);
+            }
+            if (this.sensorHull) {
+                this.physicsManager.removeBody(`${this.id}_sensor`);
+            }
+        }
     }
 }
 
