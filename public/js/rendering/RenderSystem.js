@@ -1,3 +1,4 @@
+import { GameMap } from './map.js';  // Update import
 import { GAME_CONSTANTS } from '../core/constants.js';
 
 export const RENDER_LAYERS = {
@@ -5,9 +6,9 @@ export const RENDER_LAYERS = {
     GRID: 1,
     ISLANDS: 2,
     SHIPS: 3,
-    OTHER_PLAYERS: 4,
-    PLAYERS: 5,
-    MODULES: 6,
+    SHIP_MODULES: 4,
+    PLAYERS: 5,      // Player layer is now after ships but before UI
+    OTHER_PLAYERS: 6,
     UI: 7
 };
 
@@ -39,6 +40,8 @@ export class RenderSystem {
         };
 
         this.debugDraw = false;
+
+        this.map = new GameMap(GAME_CONSTANTS.GRID_SIZE);
 
         console.log('[Render] Initialized with viewport:', {
             width: this.viewport.width,
@@ -83,222 +86,76 @@ export class RenderSystem {
         this.clearRenderQueue();
     }
 
-    drawGrid(ctx) {
-        if (!ctx) return;
-
-        try {
-            ctx.save();
-            ctx.strokeStyle = '#2c3e50';
-            ctx.lineWidth = 1;
-            ctx.globalAlpha = 0.2;
-
-            // Calculate visible area
-            const leftEdge = -this.viewport.center.x + this.camera.x;
-            const rightEdge = this.viewport.center.x + this.camera.x;
-            const topEdge = -this.viewport.center.y + this.camera.y;
-            const bottomEdge = this.viewport.center.y + this.camera.y;
-
-            // Calculate grid lines positions
-            const startX = Math.floor(leftEdge / this.gridSize) * this.gridSize;
-            const endX = Math.ceil(rightEdge / this.gridSize) * this.gridSize;
-            const startY = Math.floor(topEdge / this.gridSize) * this.gridSize;
-            const endY = Math.ceil(bottomEdge / this.gridSize) * this.gridSize;
-
-            // Draw vertical lines
-            for (let x = startX; x <= endX; x += this.gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, startY);
-                ctx.lineTo(x, endY);
-                ctx.stroke();
-            }
-
-            // Draw horizontal lines
-            for (let y = startY; y <= endY; y += this.gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(startX, y);
-                ctx.lineTo(endX, y);
-                ctx.stroke();
-            }
-
-            // Draw coordinate labels
-            ctx.fillStyle = '#34495e';
-            ctx.font = '12px Arial';
-            ctx.globalAlpha = 0.5;
-            
-            for (let x = startX; x <= endX; x += this.gridSize) {
-                for (let y = startY; y <= endY; y += this.gridSize) {
-                    ctx.fillText(`${x},${y}`, x + 5, y + 15);
-                }
-            }
-
-            ctx.restore();
-        } catch (error) {
-            console.error('[Grid] Drawing error:', error);
-        }
-    }
-
     render(gameState) {
-        if (!gameState.worldPos) {
-            console.warn('[Render] No player position available');
+        if (!gameState?.ready) {
+            console.warn('[Render] Game state not ready');
+            return;
+        }
+
+        if (!gameState?.player) {
+            console.warn('[Render] Game state player not initialized');
+            return;
+        }
+
+        // Use player's physics position
+        const playerPos = gameState.player.position;
+        if (!playerPos) {
+            console.warn('[Render] Player position not available');
             return;
         }
 
         // Update camera to track player position
-        this.camera.x = gameState.worldPos.x;
-        this.camera.y = gameState.worldPos.y;
+        this.camera.x = playerPos.x;
+        this.camera.y = playerPos.y;
 
-        console.log('[Render] Camera position:', {
-            x: this.camera.x,
-            y: this.camera.y,
-            player: gameState.worldPos
-        });
-
-        // Clear the entire canvas
+        // Clear and prepare canvas
         this.ctx.clearRect(0, 0, this.viewport.width, this.viewport.height);
-        
-        // Save context state
         this.ctx.save();
-        
-        // Center the view and apply camera transform
+
+        // Setup camera transform
         const centerX = this.viewport.width / 2;
         const centerY = this.viewport.height / 2;
-        
-        // Move to center of screen
         this.ctx.translate(centerX, centerY);
-        
-        // Apply camera offset (negative to move world opposite to player)
         this.ctx.translate(-this.camera.x, -this.camera.y);
-        
-        console.log('[Render] Drawing world at offset:', {
-            centerX, centerY,
-            cameraOffset: { x: -this.camera.x, y: -this.camera.y }
-        });
 
-        // Draw background and grid
-        this.drawBackground(this.ctx);
-        this.drawGrid(this.ctx);
+        // Use Map class for background and grid
+        this.map.renderBackground(this.ctx, this.viewport, this.camera);
+        this.map.renderGrid(this.ctx, this.viewport, this.camera);
 
-        // Draw all ships
-        gameState.ships.forEach(ship => {
-            console.log('[Render] Drawing ship at:', ship.position);
-            this.queueForRendering(ship, RENDER_LAYERS.SHIPS);
-        });
+        // Draw ships
+        if (gameState.ships) {
+            gameState.ships.forEach(ship => {
+                this.queueForRendering(ship, RENDER_LAYERS.SHIPS);
+            });
+        }
 
-        // Draw player last
-        this.drawPlayer(this.ctx, gameState);
-        
+        // Queue player render using player's own render method
+        this.queueForRendering(
+            (ctx) => gameState.player.render(ctx),
+            RENDER_LAYERS.PLAYERS,
+            1
+        );
+
         // Process render queue
         this.processRenderQueue();
 
-        // Draw physics bodies if debug mode is enabled
+        // Draw physics debug if enabled
         if (this.debugDraw) {
-            const bodies = gameState.physicsManager.bodies;
-            bodies.forEach(body => {
-                this.drawPhysicsBody(this.ctx, body);
+            // Draw player physics
+            if (gameState.player) {
+                gameState.player.renderPhysicsBody(this.ctx);
+            }
+
+            // Draw ship physics and boundaries
+            gameState.ships.forEach(ship => {
+                ship.renderPhysicsBody(this.ctx);
+                if (gameState.playerState.isMounted) {
+                    ship.renderDeckBoundaries(this.ctx);
+                }
             });
         }
-        
-        // Restore context state
+
         this.ctx.restore();
-    }
-
-    drawPlayer(ctx, gameState) {
-        if (!gameState.worldPos) return;
-        
-        console.log('[Render] Player draw position:', {
-            x: gameState.worldPos.x,
-            y: gameState.worldPos.y,
-            rotation: gameState.rotation
-        });
-
-        ctx.save();
-        // Draw player circle
-        ctx.beginPath();
-        ctx.fillStyle = '#e74c3c';  // Red color
-        ctx.strokeStyle = '#c0392b';
-        ctx.lineWidth = 2;
-        ctx.arc(gameState.worldPos.x, gameState.worldPos.y, 20, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Draw direction indicator
-        ctx.beginPath();
-        ctx.moveTo(gameState.worldPos.x, gameState.worldPos.y);
-        const directionLength = 25;
-        ctx.lineTo(
-            gameState.worldPos.x + Math.cos(gameState.rotation) * directionLength,
-            gameState.worldPos.y + Math.sin(gameState.rotation) * directionLength
-        );
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        ctx.restore();
-    }
-
-    drawDebugInfo(gameState) {
-        const coords = document.getElementById('coordinates');
-        if (coords) {
-            coords.textContent = `X: ${Math.round(gameState.worldPos.x)}, Y: ${Math.round(gameState.worldPos.y)}`;
-        }
-    }
-
-    drawBackground(ctx) {
-        // Draw water background
-        ctx.save();
-        ctx.fillStyle = '#87CEEB'; // Deep blue water color
-        ctx.fillRect(
-            -this.viewport.center.x + this.camera.x,
-            -this.viewport.center.y + this.camera.y,
-            this.viewport.width,
-            this.viewport.height
-        );
-        ctx.restore();
-    }
-
-    drawPhysicsBody(ctx, body) {
-        ctx.save();
-        ctx.strokeStyle = '#FF0000';
-        ctx.lineWidth = 2;
-        ctx.globalAlpha = 0.5;
-
-        // Draw collision shape using actual body vertices
-        ctx.beginPath();
-        const vertices = body.vertices;
-        ctx.moveTo(vertices[0].x, vertices[0].y);
-        for (let i = 1; i < vertices.length; i++) {
-            ctx.lineTo(vertices[i].x, vertices[i].y);
-        }
-        ctx.closePath();
-        ctx.stroke();
-
-        // Draw debug points
-        ctx.fillStyle = '#00FF00';
-        vertices.forEach((vertex, index) => {
-            ctx.beginPath();
-            ctx.arc(vertex.x, vertex.y, 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillText(index, vertex.x + 5, vertex.y + 5);
-        });
-
-        // Draw center of mass and position
-        ctx.beginPath();
-        ctx.arc(body.position.x, body.position.y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = '#0000FF';
-        ctx.fill();
-
-        // Draw velocity vector if moving
-        if (body.velocity && (body.velocity.x !== 0 || body.velocity.y !== 0)) {
-            ctx.beginPath();
-            ctx.moveTo(body.position.x, body.position.y);
-            ctx.lineTo(
-                body.position.x + body.velocity.x * 10,
-                body.position.y + body.velocity.y * 10
-            );
-            ctx.strokeStyle = '#0000FF';
-            ctx.stroke();
-        }
-
-        ctx.restore();
     }
 
     handleResize() {

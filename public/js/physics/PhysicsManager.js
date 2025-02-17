@@ -1,194 +1,223 @@
-import { Engine, World, Bodies, Body, Vector, Vertices, Composite, Events } from 'matter-js';
+import { Engine, World, Bodies, Body, Vector, Vertices, Composite, Events, Runner } from 'matter-js';
+import { CollisionSystem } from './CollisionSystem.js';
 import { GAME_CONSTANTS } from '../core/constants.js';
 
 export class PhysicsManager {
     constructor() {
+        // Initialize engine with proper configuration
         this.engine = Engine.create({
-            enableSleeping: false,
+            enableSleeping: true,
+            gravity: { x: 0, y: 0 },
+            timing: {
+                timeScale: 1,
+                timestamp: 0,
+                lastDelta: 16.667,  // 60 FPS
+                correction: 1
+            },
+            positionIterations: 6,
+            velocityIterations: 4,
             constraintIterations: 2
         });
-        
+
         this.world = this.engine.world;
-        this.world.gravity.y = 0;
         this.bodies = new Map();
-        this.lastUpdateTime = performance.now();
-        this.updateRate = 1000 / 60;  // 60 FPS
-
-        // Collision handling
-        Engine.run(this.engine);
-        this.setupCollisionHandlers();
         
-        console.log('[Physics] Manager initialized');
-    }
+        // Fixed timestep configuration
+        this.fixedTimeStep = 1000/60;  // Physics steps at 60 FPS
+        this.accumulator = 0;
+        this.maxSteps = 5;  // Prevent spiral of death
 
-    setupCollisionHandlers() {
+        // Debug stats
+        this.stats = {
+            lastFrameTime: 0,
+            physicsSteps: 0,
+            frameCount: 0
+        };
+
+        // Create physics runner with fixed timestep
+        this.runner = Runner.create({
+            isFixed: true,
+            delta: this.fixedTimeStep,
+            enabled: false  // Don't auto-start
+        });
+
+        this.collisionSystem = new CollisionSystem();
+
+        // Set up collision detection
         Events.on(this.engine, 'collisionStart', (event) => {
-            event.pairs.forEach((pair) => {
-                console.log('[Physics] Collision between:', pair.bodyA.label, 'and', pair.bodyB.label);
+            event.pairs.forEach(pair => {
+                this.collisionSystem.handleCollision(pair.bodyA, pair.bodyB);
             });
         });
-    }
 
-    createPlayerBody(x = 0, y = 0) {
-        const body = Bodies.circle(x, y, 20, {
-            friction: 0.001,           // Very low friction
-            frictionAir: 0.05,         // Moderate air resistance
-            mass: 1,
-            density: 0.001,
-            restitution: 0.2,         // Less bouncy
-            label: 'player',
-            collisionFilter: {
-                category: 0x0002,
-                mask: 0x0001
-            }
-        });
-
-        World.add(this.world, body);
-        this.bodies.set('player', body);
-        console.log('[Physics] Created player body:', body);
-        return body;
-    }
-
-    createShipBody(ship) {
-        // Center the vertices around origin (0,0)
-        const vertices = [
-            { x: 225, y: 95 },
-            { x: 360, y: 25 },
-            { x: 360, y: -25 },
-            { x: 225, y: -95 },
-            { x: -225, y: -95 },
-            { x: -275, y: 0 },
-            { x: -225, y: 95 }
-        ];
-
-        // Create the body with centered vertices
-        const body = Bodies.fromVertices(0, 0, [vertices], {
-            isStatic: true,
-            friction: 0.1,
-            label: `ship_${ship.id}`,
-            angle: ship.rotation,
-            collisionFilter: {
-                category: 0x0001,
-                mask: 0x0002
-            }
-        });
-
-        // Set the position after creation
-        Body.setPosition(body, ship.position);
-
-        // Store debug vertices relative to body center
-        body.debugVertices = vertices;
-
-        World.add(this.world, body);
-        this.bodies.set(ship.id, body);
-        
-        console.log('[Physics] Ship body created:', {
-            position: body.position,
-            vertices: vertices,
-            bounds: body.bounds
-        });
-
-        return body;
-    }
-
-    // Add method to modify vertices at runtime for testing
-    modifyShipVertices(shipId, newVertices) {
-        const body = this.bodies.get(shipId);
-        if (!body) return;
-
-        // Remove old body
-        World.remove(this.world, body);
-
-        // Create new body with updated vertices
-        const updatedBody = Bodies.fromVertices(
-            body.position.x,
-            body.position.y,
-            [newVertices],
-            {
-                ...body,
-                isStatic: true
-            }
-        );
-
-        // Store debug vertices
-        updatedBody.debugVertices = [...newVertices];
-
-        // Add new body
-        World.add(this.world, updatedBody);
-        this.bodies.set(shipId, updatedBody);
-
-        console.log('[Physics] Updated ship vertices:', newVertices);
-    }
-
-    updateBodies(gameState) {
-        const playerBody = this.bodies.get('player');
-        if (playerBody && gameState.worldPos) {
-            // Update position without changing velocity
-            Body.setPosition(playerBody, {
-                x: gameState.worldPos.x,
-                y: gameState.worldPos.y
+        Events.on(this.engine, 'collisionEnd', (event) => {
+            event.pairs.forEach(pair => {
+                this.collisionSystem.endCollision(pair.bodyA, pair.bodyB);
             });
-            Body.setAngle(playerBody, gameState.rotation);
+        });
 
-            // Update game state with precise physics positions
-            gameState.worldPos.x = playerBody.position.x;
-            gameState.worldPos.y = playerBody.position.y;
-        }
-
-        // Update ship bodies
-        gameState.ships.forEach(ship => {
-            const shipBody = this.bodies.get(ship.id);
-            if (shipBody) {
-                Body.setPosition(shipBody, {
-                    x: ship.position.x,
-                    y: ship.position.y
-                });
-                Body.setAngle(shipBody, ship.rotation);
-            } else {
-                this.createShipBody(ship);
+        // Register collision handlers
+        this.collisionSystem.registerCollisionHandler('player', (player, other) => {
+            if (other.label.startsWith('ship_mount')) {
+                this.handleMountableArea(player, other);
             }
+        });
+
+        this.collisionCallbacks = new Map();
+
+        console.log('[Physics] Initialized with:', {
+            timeStep: this.fixedTimeStep,
+            maxSubSteps: this.maxSteps
         });
     }
 
     update(deltaTime) {
-        Engine.update(this.engine, deltaTime);
-        return this.getState();
+        this.stats.frameCount++;
+        
+        // Cap maximum delta time to prevent spiral of death
+        const maxDelta = this.fixedTimeStep * this.maxSteps;
+        deltaTime = Math.min(deltaTime, maxDelta);
+
+        // Accumulate time for physics updates
+        this.accumulator += deltaTime;
+        this.stats.physicsSteps = 0;
+
+        // Run fixed timestep updates
+        let steps = 0;
+        while (this.accumulator >= this.fixedTimeStep && steps < this.maxSteps) {
+            Engine.update(this.engine, this.fixedTimeStep);
+            this.accumulator -= this.fixedTimeStep;
+            steps++;
+        }
+
+        // Log performance stats periodically
+        if (this.stats.frameCount % 600 === 0) {  // Every 10 seconds at 60fps
+            console.log('[Physics] Performance:', {
+                averageSteps: this.stats.physicsSteps,
+                timeStep: this.fixedTimeStep,
+                accumulator: this.accumulator
+            });
+        }
+
+        // Get interpolated state for rendering
+        const alpha = this.accumulator / this.fixedTimeStep;
+        return this.getInterpolatedState(alpha);
     }
 
-    getState() {
-        const playerBody = this.bodies.get('player');
-        if (!playerBody) return null;
-
-        return {
-            x: playerBody.position.x,
-            y: playerBody.position.y,
-            angle: playerBody.angle,
-            velocity: playerBody.velocity
+    getInterpolatedState(alpha) {
+        // Get current physics state with interpolation
+        const state = {
+            bodies: new Map(),
+            time: this.engine.timing.timestamp,
+            alpha
         };
+
+        this.bodies.forEach((body, id) => {
+            state.bodies.set(id, {
+                position: { ...body.position },
+                angle: body.angle,
+                velocity: { ...body.velocity },
+                angularVelocity: body.angularVelocity
+            });
+        });
+
+        return state;
     }
 
-    applyForce(body, force) {
-        if (!body) return;
-        
-        // Scale force for better control
-        const scaledForce = {
-            x: force.x * 0.001,  // Adjust these scaling factors
-            y: force.y * 0.001   // to control movement sensitivity
-        };
+    addBody(id, body, options = {}) {
+        // Add collision filtering
+        if (body.label?.startsWith('player')) {
+            body.collisionFilter = this.collisionSystem.getCollisionFilter('PLAYER');
+        } else if (body.label?.startsWith('ship_hull')) {
+            body.collisionFilter = this.collisionSystem.getCollisionFilter('SHIP_HULL');
+        } else if (body.label?.startsWith('ship_mount')) {
+            body.collisionFilter = this.collisionSystem.getCollisionFilter('MOUNT_SENSOR');
+        }
 
-        Body.applyForce(body, body.position, scaledForce);
-        
-        // Debug logging
-        console.log('[Physics] Force applied:', {
-            original: force,
-            scaled: scaledForce,
-            velocity: body.velocity,
-            speed: Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2)
+        World.add(this.world, body);
+        this.bodies.set(id, body);
+
+        // Store collision callbacks if provided
+        if (options.onCollide) {
+            this.collisionCallbacks.set(body.id, options.onCollide);
+        }
+
+        console.log('[Physics] Added body:', { 
+            id, 
+            type: body.label,
+            angle: body.angle 
         });
     }
 
-    cleanup() {
-        World.clear(this.world);
-        Engine.clear(this.engine);
+    removeBody(id) {
+        const body = this.bodies.get(id);
+        if (body) {
+            World.remove(this.world, body);
+            this.bodies.delete(id);
+            console.log('[Physics] Removed body:', { id, type: body.label });
+        }
     }
+
+    applyForce(body, force) {
+        if (!body) {
+            console.warn('[Physics] Cannot apply force: body is null');
+            return;
+        }
+
+        // Apply force directly without position offset
+        Body.applyForce(body, 
+            body.position,
+            {
+                x: force.x,
+                y: force.y
+            }
+        );
+
+        // Debug force application
+        if (this.stats.frameCount % 60 === 0) {
+            console.log('[Physics] Force applied:', {
+                force,
+                velocity: body.velocity,
+                position: body.position
+            });
+        }
+    }
+
+    getCollisionCallbacks(pair) {
+        const callbacks = [];
+        
+        // Get callbacks for both bodies in collision
+        const callbackA = this.collisionCallbacks.get(pair.bodyA.id);
+        const callbackB = this.collisionCallbacks.get(pair.bodyB.id);
+        
+        if (callbackA) callbacks.push(callbackA);
+        if (callbackB) callbacks.push(callbackB);
+        
+        return callbacks;
+    }
+
+    handleMountableArea(playerBody, mountSensor) {
+        const ship = mountSensor.plugin?.ship;
+        if (ship) {
+            window.dispatchEvent(new CustomEvent('mountAvailable', {
+                detail: { shipId: ship.id }
+            }));
+        }
+    }
+
+    cleanup() {
+        // Stop runner first
+        Runner.stop(this.runner);
+        
+        // Clear all bodies
+        World.clear(this.world);
+        this.bodies.clear();
+        
+        // Clean up engine
+        Engine.clear(this.engine);
+
+        console.log('[Physics] Cleaned up physics system');
+    }
+
+    // ... rest of your existing methods ...
 }

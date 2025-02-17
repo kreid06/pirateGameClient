@@ -1,141 +1,130 @@
 import { Brigantine } from '../entities/ships/Ship.js';
+import { Player } from '../entities/player/Player.js';
 import { PhysicsManager } from '../physics/PhysicsManager.js';
+import { Body } from 'matter-js';
+import { Hud } from '../ui/Hud.js';
 
 export class GameState {
     constructor() {
-        this.ready = false;
-        this.worldPos = { x: 0, y: 0 };
-        this.rotation = 0;
+        this.physicsManager = new PhysicsManager();
         this.ships = new Map();
         this.otherPlayers = new Map();
         this.lastUpdateTime = performance.now();
-        
-        // Adjust physics properties for better control
-        this.physics = {
-            maxForce: 1,             // Increased base force
-            acceleration: 0.1,        // More responsive acceleration
-            deceleration: 0.98,      // Slight deceleration
-            maxSpeed: 2,            // Maximum speed limit
-            turnSpeed: 0.05,         // Rotation speed
-            // Movement multipliers
-            forward: 1.0,            // Full power forward
-            backward: 0.5,           // Half power backward
-            strafe: 0.7,             // 70% power for strafing
-            force: { x: 0, y: 0 }
+        this.ready = false;
+
+        // Game loop timing
+        this.fixedTimeStep = 1000/60;  // Match physics timestep
+        this.accumulator = 0;
+
+        // Add camera position
+        this.camera = {
+            x: 0,
+            y: 0
         };
 
-        this.velocity = { x: 0, y: 0 };
-        this.worldPos = { x: 0, y: 0 };
-        this.rotation = 0;
+        this.hud = new Hud();
+    }
 
-        this.interpolation = {
-            delay: 50,
-            bufferSize: 30,
-            smoothing: 0.6,
-            positions: new Map()
-        };
+    initPlayer(playerId, options = {}) {
+        this.player = new Player({
+            id: playerId,
+            name: options.name || `Player_${playerId}`,
+            x: options.x || 0,
+            y: options.y || 0,
+            rotation: options.rotation || 0,
+            physicsManager: this.physicsManager
+        });
 
-        // Add movement state
-        this.velocity = { x: 0, y: 0 };
-        this.acceleration = { x: 0, y: 0 };
+        // Initialize world position from player
+        this.worldPos = this.player.position;
+        this.rotation = this.player.rotation;
+        this.playerState = this.player.state;
+        this.ready = true;
 
-        // Movement constants
-        this.moveSpeed = 200;
-        this.strafeSpeed = 150;
+        console.log('[GameState] Player initialized:', {
+            id: playerId,
+            position: this.worldPos,
+            ready: this.ready
+        });
 
-        // Create physics manager
-        this.physicsManager = new PhysicsManager();
-        
-        // Add static ships and their physics bodies
-        this.ships = new Map();
-        this.addStaticShips();
-        
-        // Create player physics body
-        this.physicsManager.createPlayerBody(0, 0);
+        return this.player;
+    }
+
+    cleanup() {
+        if (this.player) {
+            this.player.cleanup();
+        }
+        if (this.physicsManager) {
+            this.physicsManager.cleanup();
+        }
+        this.ships.clear();
+        this.otherPlayers.clear();
+        this.ready = false;
     }
 
     addStaticShips() {
-        // Add a brigantine at -500,0
-        const brigantine = new Brigantine(-500, 0, 0, 'static_ship_1');
-        this.ships.set(brigantine.id, brigantine);
-        console.log('[GameState] Added static brigantine at:', brigantine.position);
-    }
+        // Add multiple ships for testing
+        const shipConfigs = [
+            { x: -500, y: 0, r: 0, id: 'static_ship_1' },
+            { x: 500, y: 300, r: Math.PI / 4, id: 'static_ship_2' },
+            { x: -200, y: -400, r: -Math.PI / 6, id: 'static_ship_3' }
+        ];
 
-    applyForce(force) {
-        // F = ma, so a = F/m
-        const acceleration = {
-            x: force.x / this.physics.mass,
-            y: force.y / this.physics.mass
-        };
-
-        this.velocity.x += acceleration.x;
-        this.velocity.y += acceleration.y;
+        shipConfigs.forEach(config => {
+            const ship = new Brigantine(
+                config.x,
+                config.y,
+                config.r,
+                config.id
+            );
+            
+            this.ships.set(ship.id, ship);
+            ship.createPhysicsBody(this.physicsManager);
+            
+            console.log('[GameState] Added static ship:', {
+                id: ship.id,
+                position: ship.position,
+                rotation: ship.rotation,
+                physics: !!ship.physicsBody
+            });
+        });
     }
 
     applyInput(input) {
+        if (!this.player || !input) return;
+
         // Update rotation to face mouse
         if (input.mousePos) {
-            this.rotation = this.calculateRotation(input.mousePos);
+            const angle = Math.atan2(
+                input.mousePos.y - this.player.position.y,
+                input.mousePos.x - this.player.position.x
+            );
+            this.player.setRotation(angle);
+            this.rotation = angle;
         }
 
-        // Get player physics body
-        const playerBody = this.physicsManager.bodies.get('player');
-        if (!playerBody) return;
-
-        // Calculate force vector
-        let force = { x: 0, y: 0 };
-
-        if (input.forward || input.backward || input.strafeLeft || input.strafeRight) {
-            if (input.forward) {
-                force.x += Math.cos(this.rotation) * this.physics.maxForce * this.physics.forward;
-                force.y += Math.sin(this.rotation) * this.physics.maxForce * this.physics.forward;
-            }
-            if (input.backward) {
-                force.x -= Math.cos(this.rotation) * this.physics.maxForce * this.physics.backward;
-                force.y -= Math.sin(this.rotation) * this.physics.maxForce * this.physics.backward;
-            }
-            if (input.strafeLeft) {
-                force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
-                force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
-            }
-            if (input.strafeRight) {
-                force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
-                force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * this.physics.strafe;
-            }
-
-            // Scale force based on speed
-            const currentSpeed = Math.sqrt(playerBody.velocity.x ** 2 + playerBody.velocity.y ** 2);
-            if (currentSpeed > this.physics.maxSpeed) {
-                const scale = this.physics.maxSpeed / currentSpeed;
-                force.x *= scale;
-                force.y *= scale;
-            }
-
-            // Apply the force with debug logging
-            console.log('[Physics] Applying force:', {
-                force,
-                currentSpeed,
-                position: this.worldPos,
-                rotation: this.rotation
-            });
-            this.physicsManager.applyForce(playerBody, force);
-        }
+        // Apply movement through player
+        this.player.applyMovementForce(input);
     }
 
     update(deltaTime) {
         // Update physics first
-        this.physicsManager.update(deltaTime);
-        
-        // Get updated positions from physics
-        const physicsState = this.physicsManager.getState();
-        if (physicsState) {
-            this.worldPos.x = physicsState.x;
-            this.worldPos.y = physicsState.y;
-            // Only update rotation from input, not physics
+        const physicsState = this.physicsManager.update(deltaTime);
+
+        // Update game state with interpolated physics
+        if (this.player && physicsState.bodies.has(this.player.id)) {
+            const playerPhysics = physicsState.bodies.get(this.player.id);
+            this.worldPos.x = this.camera.x = playerPhysics.position.x;
+            this.worldPos.y = this.camera.y = playerPhysics.position.y;
+            this.rotation = playerPhysics.angle;
         }
 
-        // Update physics bodies with new state
-        this.physicsManager.updateBodies(this);
+        // Update entities
+        this.ships.forEach(ship => ship.update(deltaTime));
+        this.otherPlayers.forEach(player => player.update(deltaTime));
+        this.hud.update(this);
+
+        return physicsState;
     }
 
     updatePlayer(position, rotation) {
@@ -158,12 +147,5 @@ export class GameState {
         ship.rotation = r || 0;
         
         return ship;
-    }
-
-    calculateRotation(mousePos) {
-        return Math.atan2(
-            mousePos.y - this.worldPos.y,
-            mousePos.x - this.worldPos.x
-        );
     }
 }

@@ -1,10 +1,11 @@
 import { GameClient } from './core/gameClient.js';
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
     console.log('[Main] Starting game in local test mode');
-    window.game = new GameClient();
+    const game = new GameClient();
+    await game.init();  // Wait for initialization
     
-    // Hide login form and show game canvas immediately
+    // Hide login form and show game canvas
     const loginForm = document.getElementById('loginForm');
     const gameCanvas = document.getElementById('gameCanvas');
     const coordinates = document.getElementById('coordinates');

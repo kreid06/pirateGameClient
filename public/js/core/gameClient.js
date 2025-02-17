@@ -26,6 +26,33 @@ export class GameClient {
         this.state.ready = true;
         requestAnimationFrame(this.gameLoop);
         console.log('[Game] Starting local test mode...');
+
+        this.lastTime = 0;
+        this.targetDelta = 1000/60;  // Target 60 FPS
+        this.running = false;  // Don't start until initialized
+    }
+
+    async init() {
+        // Initialize game state first
+        this.gameState = new GameState();
+        
+        // Initialize local test player
+        await this.gameState.initPlayer('local_player', {
+            name: 'Test Player',
+            x: 0,
+            y: 0,
+            rotation: 0
+        });
+
+        // Initialize static ships after player
+        this.gameState.addStaticShips();
+
+        // Start game loop only after initialization
+        this.running = true;
+        this.lastFrameTime = performance.now();
+        requestAnimationFrame(this.gameLoop.bind(this));
+
+        console.log('[GameClient] Initialized with player:', this.gameState.player);
     }
 
     setupEventListeners() {
@@ -42,6 +69,10 @@ export class GameClient {
             if (this.renderSystem) {
                 this.renderSystem.toggleDebugDraw();
             }
+        });
+
+        window.addEventListener('playerJump', () => {
+            // this.state.handleJump();
         });
 
         // Comment out server connection code for testing
@@ -63,26 +94,25 @@ export class GameClient {
     }
 
     gameLoop(timestamp) {
-        const deltaTime = timestamp - (this.state.lastUpdateTime || timestamp);
-        this.state.lastUpdateTime = timestamp;
-        
-        // Process inputs with camera position for mouse coordinate conversion
-        if (this.inputSystem && this.renderSystem) {
-            const input = this.inputSystem.getInput(
-                this.state.worldPos,
-                this.renderSystem.viewport
-            );
-            if (input) {
-                this.handleInput(input);
-            }
+        if (!this.running || !this.gameState?.ready) return;
+
+        const deltaTime = Math.min(timestamp - this.lastTime, this.targetDelta);
+        this.lastTime = timestamp;
+
+        // Get input with mouse position relative to viewport
+        const input = this.inputSystem.getInput(
+            this.gameState.worldPos,
+            this.renderSystem.viewport
+        );
+
+        if (input) {
+            this.gameState.applyInput(input);
         }
-        
-        // Update game state
-        this.state.update(deltaTime);
-        
-        // Render frame
-        this.renderSystem.render(this.state);
-        
+
+        // Update and render
+        this.gameState.update(deltaTime);
+        this.renderSystem.render(this.gameState);
+
         requestAnimationFrame(this.gameLoop);
     }
 
