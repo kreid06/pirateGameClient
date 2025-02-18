@@ -75,30 +75,19 @@ export class Ship {
 
     render(ctx) {
         ctx.save();
-        
-        // 1. Transform to ship's position
         const pos = this.physicsBody ? this.physicsBody.position : this.position;
         const rot = this.physicsBody ? this.physicsBody.angle : this.rotation;
         
         ctx.translate(pos.x, pos.y);
         ctx.rotate(rot);
         
-        // 2. Draw ship hull in local space
         this.drawHull(ctx);
-        
-        // 3. Draw modules in local space
-        this.renderModules(ctx);
-        
-        // 4. Debug draw physics if enabled
-        if (this.physicsManager?.debugDraw) {
-            this.renderPhysicsDebug(ctx);
-        }
+        this.renderModules(ctx);  // Key method for module rendering
         
         ctx.restore();
     }
 
     renderModules(ctx) {
-        // Important: Ship's transform is already applied at this point
         const renderLayers = [
             { type: SteeringWheel, name: 'steering' },
             { type: Cannon, name: 'cannons' },
@@ -110,9 +99,7 @@ export class Ship {
             this.modules.forEach(module => {
                 if (module instanceof layer.type) {
                     ctx.save();
-                    // Translate to module's bind position
                     ctx.translate(module.bindPosition.x, module.bindPosition.y);
-                    // Don't rotate here - module handles its own rotation relative to ship
                     
                     if (layer.renderMethod) {
                         module[layer.renderMethod]?.(ctx);
@@ -418,14 +405,14 @@ export class Brigantine extends Ship {
         this.modules.set(steeringId, steering);
         steering.bindToShip(this);
 
-        // Add cannons with proper positioning
+        // Add cannons with proper mounting angles
         const cannonConfigs = [
-            { x: 0, y: 75, r: Math.PI },
-            { x: 100, y: 75, r: Math.PI },
-            { x: -100, y: 75, r: Math.PI },
-            { x: 0, y: -75, r: 0 },
-            { x: 100, y: -75, r: 0 },
-            { x: -100, y: -75, r: 0 }
+            { x: 0, y: 85, r: Math.PI },    // Port side cannons (facing left)
+            { x: 100, y: 85, r: Math.PI },
+            { x: -100, y: 85, r: Math.PI },
+            { x: 0, y: -85, r: 0 },         // Starboard cannons (facing right)
+            { x: 100, y: -85, r: 0 },
+            { x: -100, y: -85, r: 0 }
         ];
 
         cannonConfigs.forEach(config => {

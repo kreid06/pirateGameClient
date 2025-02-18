@@ -3,8 +3,8 @@ import { Bodies, Constraint, Body } from 'matter-js';
 export class ShipComponent {
     constructor(x, y, r, id, quality) {
         this.position = { x, y };
-        this.rotation = r;
-        this.targetRotation = r;
+        this.rotation = 0;  // Base rotation should be 0
+        this.targetRotation = 0;  // Remove rotation interpolation
         this.id = id;
         this.quality = quality || 1;
         this.health = 100 * this.quality;
@@ -110,18 +110,9 @@ export class ShipComponent {
 
             // Update physics body position and rotation
             Body.setPosition(this.physicsBody, newPos);
-            Body.setAngle(this.physicsBody, shipRot);
 
             this.worldPosition = newPos;
-            this.worldRotation = shipRot;
-        }
-
-        // Smooth rotation interpolation
-        if (this.targetRotation !== this.rotation) {
-            const diff = this.targetRotation - this.rotation;
-            // Normalize angle
-            const normalizedDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
-            this.rotation += normalizedDiff * this.interpolationSpeed;
+            this.worldRotation = this.physicsBody.angle;
         }
     }
 
@@ -147,8 +138,7 @@ export class ShipComponent {
 
     render(ctx) {
         ctx.save();
-        // No translation needed - parent ship handles it
-        ctx.rotate(this.rotation);
+        // Remove default rotation, let components handle their own rotation
         this.renderComponent(ctx);
         ctx.restore();
     }
@@ -229,6 +219,10 @@ export class Cannon extends ShipComponent {
             width: 30,
             height: 60
         };
+
+        // Base orientation relative to ship (used for mount position)
+        this.baseRotation = r;  // Store the initial mounting angle
+        this.rotation = 0;      // This will be for turret rotation
     }
 
     update(deltaTime) {
@@ -237,6 +231,28 @@ export class Cannon extends ShipComponent {
         // Handle reload
         if (!this.isLoaded && Date.now() - this.lastFireTime >= this.reloadTime) {
             this.isLoaded = true;
+        }
+
+        if (this.ship && this.physicsBody) {
+            // Get ship's current transform
+            const shipPos = this.ship.physicsBody?.position || this.ship.position;
+            const shipRot = this.ship.physicsBody?.angle || this.ship.rotation;
+
+            // Calculate new world position
+            const cos = Math.cos(shipRot);
+            const sin = Math.sin(shipRot);
+            
+            const newPos = {
+                x: shipPos.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+                y: shipPos.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
+            };
+
+            // Update physics body position and rotation
+            Body.setPosition(this.physicsBody, newPos);
+            Body.setAngle(this.physicsBody, shipRot + this.baseRotation);
+
+            this.worldPosition = newPos;
+            this.worldRotation = shipRot + this.baseRotation;
         }
     }
 
@@ -263,35 +279,72 @@ export class Cannon extends ShipComponent {
     }
 
     renderComponent(ctx) {
-        // Draw base at ship's rotation (don't rotate it)
+        ctx.save();
+        
+        // Missing: Need to apply base rotation first
+        ctx.rotate(this.baseRotation);  // <-- Add this line to properly orient the cannon base
+        
+        // Draw base
         ctx.fillStyle = '#8B4513';
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2;
         ctx.fill(this.paths.base);
         ctx.stroke(this.paths.base);
 
-        // Now rotate for the cannon's own rotation
-        ctx.rotate(this.rotation);
-
-        // Draw turret
+        // Draw turret with additional rotation
+        ctx.rotate(this.rotation);  // Turret rotation on top of base rotation
         ctx.fillStyle = '#000000';
         ctx.fill(this.paths.turret);
+        
+        ctx.restore();
     }
 
     drawBase(path) {
-        path.moveTo(15, 10);
-        path.lineTo(-15, 10);
-        path.lineTo(-15, -10);
-        path.lineTo(15, -10);
+        path.moveTo(15, 20);
+        path.lineTo(-15, 20);
+        path.lineTo(-15, 0);
+        path.lineTo(15, 0);
         path.closePath();
     }
 
     drawTurret(path) {
-        path.moveTo(10, 15);
-        path.lineTo(-10, 15);
-        path.lineTo(-8, -45);
-        path.lineTo(8, -45);
+        path.moveTo(10, 25);
+        path.lineTo(-10, 25);
+        path.lineTo(-8, -35);
+        path.lineTo(8, -35);
+        path.lineTo(8, -35);
         path.closePath();
+    }
+
+    createPhysicsBody(physicsManager, parentBody, initialAngle) {
+        if (!physicsManager || !this.ship || !parentBody) return;
+
+        // Include base rotation in initial angle calculation
+        const totalAngle = (initialAngle || parentBody.angle) + this.baseRotation;
+        
+        const cos = Math.cos(totalAngle);
+        const sin = Math.sin(totalAngle);
+        
+        const worldPos = {
+            x: parentBody.position.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+            y: parentBody.position.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
+        };
+
+        const bodyOptions = {
+            isStatic: true,  // Make static since we'll manually update position
+            angle: totalAngle,  // Use combined angle for physics body
+            label: `module_${this.constructor.name}_${this.id}`,
+            collisionFilter: physicsManager.collisionSystem.getCollisionFilter(
+                this instanceof Sail ? 'SHIP_MODULE_NON_INTERACT' : 'SHIP_MODULE'
+            ),
+            plugin: { component: this }
+        };
+
+        this.physicsBody = this.physicsShape.type === 'circle' 
+            ? Bodies.circle(worldPos.x, worldPos.y, this.physicsShape.radius, bodyOptions)
+            : Bodies.rectangle(worldPos.x, worldPos.y, this.physicsShape.width, this.physicsShape.height, bodyOptions);
+
+        physicsManager.addBody(this.id, this.physicsBody);
     }
 
     serverUpdate(data) {
@@ -635,5 +688,6 @@ export class ShipCannon extends Cannon {
     constructor(shipId, quality, x, y, rotation, efficiency, id) {
         super(x, y, rotation, id, quality, efficiency);
         this.bindPosition = { x, y };
+        // Base rotation is already set from parent constructor
     }
 }
