@@ -9,9 +9,41 @@ export class ShipComponent {
         this.ship = null;
         this.bindPosition = { x: 0, y: 0 };
         this.interpolationSpeed = 0.1;
+        
+        // Add world position tracking
+        this.worldPosition = { x: 0, y: 0 };
+        this.worldRotation = 0;
+    }
+
+    // Add base bindToShip method that all components will inherit
+    bindToShip(shipRef) {
+        this.ship = shipRef;
+        if (this.ship?.position) {
+            this.worldPosition = {
+                x: this.ship.position.x + this.bindPosition.x,
+                y: this.ship.position.y + this.bindPosition.y
+            };
+        }
     }
 
     update(deltaTime) {
+        // Update world position based on ship and relative position
+        if (this.ship) {
+            const shipPos = this.ship.position;
+            const shipRot = this.ship.rotation;
+            
+            // Calculate world position using ship's center as origin
+            const cos = Math.cos(shipRot);
+            const sin = Math.sin(shipRot);
+            
+            this.worldPosition = {
+                x: shipPos.x + (cos * this.position.x - sin * this.position.y),
+                y: shipPos.y + (sin * this.position.x + cos * this.position.y)
+            };
+            
+            this.worldRotation = shipRot + this.rotation;
+        }
+
         // Smooth rotation interpolation
         if (this.targetRotation !== this.rotation) {
             const diff = this.targetRotation - this.rotation;
@@ -42,8 +74,8 @@ export class ShipComponent {
     }
 
     render(ctx) {
+        // No need to translate - ship handles positioning
         ctx.save();
-        ctx.translate(this.bindPosition.x, this.bindPosition.y);
         this.renderComponent(ctx);
         ctx.restore();
     }
@@ -62,6 +94,16 @@ export class Cannon extends ShipComponent {
         this.reloadTime = 3000; // 3 seconds base reload time
         this.isLoaded = true;
         this.lastFireTime = 0;
+        
+        // Add paths container
+        this.paths = {
+            base: new Path2D(),
+            turret: new Path2D()
+        };
+        
+        // Initialize paths
+        this.drawBase(this.paths.base);
+        this.drawTurret(this.paths.turret);
         
         // Firing properties
         this.range = 500;
@@ -102,8 +144,6 @@ export class Cannon extends ShipComponent {
 
     renderComponent(ctx) {
         // Draw base at ship's rotation (don't rotate it)
-        this.paths.base = new Path2D();
-        this.drawBase(this.paths.base);
         ctx.fillStyle = '#8B4513';
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2;
@@ -114,8 +154,6 @@ export class Cannon extends ShipComponent {
         ctx.rotate(this.rotation);
 
         // Draw turret
-        this.paths.turret = new Path2D();
-        this.drawTurret(this.paths.turret);
         ctx.fillStyle = '#000000';
         ctx.fill(this.paths.turret);
     }
@@ -147,11 +185,15 @@ export class Cannon extends ShipComponent {
     }
 }
 
+// Update SteeringWheel to store bind position
 export class SteeringWheel extends ShipComponent {
     constructor(x, y, r, id, quality) {
         super(x, y, r, id, quality);
         this.turnSpeed = 0.01 * quality; // Radians per frame
         this.currentTurn = 0; // -1 to 1
+        this.position = { x: -50, y: 0 }; // Fixed position relative to ship
+        this.rotation = 0; // Fixed rotation
+        this.bindPosition = { x: -50, y: 0 }; // Match position for binding
     }
 
     update(deltaTime) {
@@ -168,7 +210,10 @@ export class SteeringWheel extends ShipComponent {
     }
 
     renderComponent(ctx) {
-        ctx.rotate(this.rotation);
+        // Save context for wheel drawing
+        ctx.save();
+        
+        // Draw wheel at fixed position
         this.path = new Path2D();
         this.path.moveTo(-10, -20);
         this.path.lineTo(10, -20);
@@ -178,6 +223,8 @@ export class SteeringWheel extends ShipComponent {
 
         ctx.fillStyle = '#8B4513';
         ctx.fill(this.path);
+        
+        ctx.restore();
     }
 }
 
@@ -208,17 +255,9 @@ export class Sail extends ShipComponent {
         this.openness = Math.max(0, Math.min(1, amount));
     }
 
-    renderComponent(ctx) {
-        // Draw mast
-        ctx.beginPath();
-        ctx.arc(0, 0, 15, 0, Math.PI * 2);
-        ctx.fillStyle = '#D2B48C';
-        ctx.strokeStyle = '#8B4513';
-        ctx.lineWidth = 4;
-        ctx.fill();
-        ctx.stroke();
-
-        // Draw sail
+    renderFiber(ctx) {
+        // Draw sail fiber
+        ctx.save();
         ctx.rotate(this.rotation);
         ctx.beginPath();
         ctx.moveTo(0, 130);
@@ -230,5 +269,39 @@ export class Sail extends ShipComponent {
         ctx.lineWidth = 2;
         ctx.fill();
         ctx.stroke();
+        ctx.restore();
+    }
+
+    renderMast(ctx) {
+        // Draw mast
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(0, 0, 15, 0, Math.PI * 2);
+        ctx.fillStyle = '#D2B48C';
+        ctx.strokeStyle = '#8B4513';
+        ctx.lineWidth = 4;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    // Replace original render with new layered approach
+    renderComponent(ctx) {
+        // Render nothing here - rendering is now handled by specific methods
+    }
+}
+
+// SpeedSail and ShipCannon can now use the base bindToShip method
+export class SpeedSail extends Sail {
+    constructor(shipId, quality, x, y, efficiency, id) {
+        super(x, y, 0, id, quality, efficiency);
+        this.bindPosition = { x, y };
+    }
+}
+
+export class ShipCannon extends Cannon {
+    constructor(shipId, quality, x, y, rotation, efficiency, id) {
+        super(x, y, rotation, id, quality, efficiency);
+        this.bindPosition = { x, y };
     }
 }

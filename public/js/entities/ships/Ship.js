@@ -1,4 +1,4 @@
-import { Cannon, SteeringWheel, Sail } from '../components/Component.js';
+import { Cannon, SteeringWheel, Sail, SpeedSail, ShipCannon } from '../components/Component.js';
 import { Bodies, Body, Vertices } from 'matter-js';
 
 export class Ship {
@@ -69,16 +69,46 @@ export class Ship {
         const renderPos = this.physicsBody ? this.physicsBody.position : this.position;
         const renderRot = this.physicsBody ? this.physicsBody.angle : this.rotation;
         
+        // Remove the -25px offset and center everything properly
         ctx.translate(renderPos.x, renderPos.y);
         ctx.rotate(renderRot);
         
         this.drawHull(ctx);
+        this.renderModules(ctx);
         
-        // Draw modules
-        this.modules.forEach(module => {
-            if (module.render) module.render(ctx);
+        ctx.restore();
+    }
+
+    renderModules(ctx) {
+        // First save the ship's transform context
+        ctx.save();
+        
+        const renderLayers = [
+            { type: SteeringWheel, name: 'steering' },
+            { type: Cannon, name: 'cannons' },
+            { type: Sail, name: 'sailFiber', renderMethod: 'renderFiber' },
+            { type: Sail, name: 'sailMast', renderMethod: 'renderMast' }
+        ];
+
+        renderLayers.forEach(layer => {
+            this.modules.forEach(module => {
+                if (module instanceof layer.type) {
+                    // Save context for each module
+                    ctx.save();
+                    // Move to module's position relative to ship center
+                    ctx.translate(module.position.x, module.position.y);
+                    
+                    if (layer.renderMethod) {
+                        module[layer.renderMethod]?.(ctx);
+                    } else {
+                        module.render(ctx);
+                    }
+                    
+                    ctx.restore();
+                }
+            });
         });
-        
+
         ctx.restore();
     }
 
@@ -86,10 +116,10 @@ export class Ship {
         // Base hull drawing - can be overridden by child classes
         if (!this.path) {
             this.path = new Path2D();
-            this.path.moveTo(225, 90);
-            this.path.quadraticCurveTo(500, 0, 225, -90);
-            this.path.lineTo(-225, -90);
-            this.path.quadraticCurveTo(-325, 0, -225, 90);
+            this.path.moveTo(190, 90);
+            this.path.quadraticCurveTo(465, 0, 190, -90);
+            this.path.lineTo(-260, -90);
+            this.path.quadraticCurveTo(-360, 0, -260, 90);
             this.path.closePath();
         }
 
@@ -352,6 +382,9 @@ export class Ship {
             Body.setPosition(this.sensorHull, { x, y });
         }
         this.position = { x, y };
+        
+        // Update all module positions
+        this.updateModulePositions();
     }
 
     // Update both bodies' angles when ship rotates
@@ -363,6 +396,17 @@ export class Ship {
             Body.setAngle(this.sensorHull, angle);
         }
         this.rotation = angle;
+        
+        // Update all module positions
+        this.updateModulePositions();
+    }
+
+    updateModulePositions() {
+        this.modules.forEach(module => {
+            if (module.update) {
+                module.update(0); // Force position update
+            }
+        });
     }
 
     // Clean up both bodies
@@ -392,29 +436,85 @@ export class Brigantine extends Ship {
             { x: -275, y: 0 },
             { x: -225, y: 95 }
         ];
+        this.initModules();
     }
 
-    
+    generateModuleId() {
+        return Math.random().toString(36).substr(2, 9);
+    }
+
+    initModules() {
+        // Add three speed sails along the centerline
+        [200, 0, -200].forEach(xPos => {
+            const sailId = this.generateModuleId();
+            const sail = new SpeedSail(
+                this.id,      // shipId
+                1,           // quality
+                xPos,        // x position
+                0,          // y position
+                1,          // efficiency
+                sailId      // component id
+            );
+            this.modules.set(sailId, sail);
+            sail.bindToShip(this); // Pass ship reference after creation
+        });
+
+        // Add steering wheel with fixed position
+        const steeringId = this.generateModuleId();
+        const steering = new SteeringWheel(
+            -50,    // Fixed x position
+            0,      // Fixed y position
+            0,      // Fixed rotation
+            steeringId,
+            1       // quality
+        );
+        this.modules.set(steeringId, steering);
+        steering.bindToShip(this);
+
+        // Add cannons with proper positioning
+        const cannonConfigs = [
+            { x: 0, y: 75, r: Math.PI },
+            { x: 100, y: 75, r: Math.PI },
+            { x: -100, y: 75, r: Math.PI },
+            { x: 0, y: -75, r: 0 },
+            { x: 100, y: -75, r: 0 },
+            { x: -100, y: -75, r: 0 }
+        ];
+
+        cannonConfigs.forEach(config => {
+            const cannonId = this.generateModuleId();
+            const cannon = new ShipCannon(
+                this.id,
+                1,
+                config.x,
+                config.y,
+                config.r,
+                1,
+                cannonId
+            );
+            this.modules.set(cannonId, cannon);
+            cannon.bindToShip(this); // Pass ship reference
+        });
+
+        console.log('[Ship] Initialized modules:', {
+            shipId: this.id,
+            moduleCount: this.modules.size,
+            types: Array.from(this.modules.values()).map(m => m.constructor.name)
+        });
+    }
 
     render(ctx) {
         ctx.save();
-        // Apply visual offset to match physics body (-25px total offset)
-        ctx.translate(this.position.x - 25, this.position.y);
-        ctx.rotate(this.rotation);
+        const renderPos = this.physicsBody ? this.physicsBody.position : this.position;
+        const renderRot = this.physicsBody ? this.physicsBody.angle : this.rotation;
         
-        // Render in layers
+        // Remove the offset and center properly
+        ctx.translate(renderPos.x, renderPos.y);
+        ctx.rotate(renderRot);
+        
         this.drawHull(ctx);
+        this.renderModules(ctx);
         
-        // Render modules in order
-        const renderOrder = [Cannon, SteeringWheel, Sail];
-        renderOrder.forEach(ComponentType => {
-            this.modules.forEach(module => {
-                if (module instanceof ComponentType) {
-                    module.render(ctx);
-                }
-            });
-        });
-
         ctx.restore();
     }
 
