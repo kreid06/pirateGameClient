@@ -89,4 +89,47 @@ export class Hud {
         this.serverTime = serverTime;
         this.render();
     }
+
+    showModuleInfo(module, canInteract) {
+        this.clearModuleInfo();
+
+        const info = module.getInteractionInfo();
+        const tooltip = document.createElement('div');
+        tooltip.className = 'module-tooltip';
+
+        const healthPercent = (module.health / (100 * module.quality)) * 100;
+        const healthColor = healthPercent > 66 ? 'green' : 
+                          healthPercent > 33 ? 'yellow' : 'red';
+
+        tooltip.innerHTML = `
+            <h3>${info.name}</h3>
+            <div class="module-info">
+                <p class="module-id">Module ID: ${module.id}</p>
+                <p class="ship-id">Ship ID: ${module.ship?.id || 'N/A'}</p>
+            </div>
+            <div class="module-stats">
+                <div class="health-bar" style="background-color: ${healthColor}; width: ${healthPercent}%"></div>
+                <p>Health: ${module.health.toFixed(0)}/${(100 * module.quality).toFixed(0)}</p>
+                <p>Quality: ${module.quality.toFixed(1)}x</p>
+                ${module.efficiency ? `<p>Efficiency: ${module.efficiency.toFixed(1)}x</p>` : ''}
+            </div>
+            ${canInteract ? '<span class="interact-prompt">Press E to mount</span>' : ''}
+        `;
+
+        // Position tooltip in lower right corner with padding
+        tooltip.style.position = 'fixed';
+        tooltip.style.bottom = '20px';
+        tooltip.style.right = '20px';
+        tooltip.style.transform = 'none'; // Remove any transforms
+
+        document.body.appendChild(tooltip);
+        this.currentTooltip = tooltip;
+    }
+
+    clearModuleInfo() {
+        if (this.currentTooltip) {
+            this.currentTooltip.remove();
+            this.currentTooltip = null;
+        }
+    }
 }

@@ -27,6 +27,36 @@ export class ShipComponent {
         // Store original local position
         this.localPosition = { x, y };
         this.bindPosition = { x, y };
+
+        // Standardize interaction distances
+        this.interactionRadius = {
+            CANNON: 55,
+            STEERING: 45,
+            SAIL: 65,
+            DEFAULT: 50
+        };
+
+        // Add mount points with interaction radius
+        this.mountPosition = { 
+            x: 0, 
+            y: -30,
+            radius: this.getInteractionRadius() 
+        };
+    }
+
+    getInteractionRadius() {
+        switch(this.constructor.name) {
+            case 'Cannon':
+            case 'ShipCannon':
+                return this.interactionRadius.CANNON;
+            case 'SteeringWheel':
+                return this.interactionRadius.STEERING;
+            case 'Sail':
+            case 'SpeedSail':
+                return this.interactionRadius.SAIL;
+            default:
+                return this.interactionRadius.DEFAULT;
+        }
     }
 
     // Add base bindToShip method that all components will inherit
@@ -187,6 +217,35 @@ export class ShipComponent {
             this.physicsBody = null;
         }
     }
+
+    getMountPosition() {
+        // Get the total rotation (ship rotation + cannon's base rotation)
+        const totalRotation = this.worldRotation;
+        
+        // Define the desired offset relative to cannon
+        
+        // Rotate the offset point based on the total rotation
+        const rotatedOffset = {
+            x: this.mountPosition.x * Math.cos(totalRotation) - this.mountPosition.y * Math.sin(totalRotation),
+            y: this.mountPosition.x * Math.sin(totalRotation) + this.mountPosition.y * Math.cos(totalRotation)
+        };
+
+        // Return position relative to the cannon's world position
+        return {
+            x: rotatedOffset.x,
+            y: rotatedOffset.y
+        };
+    }  // <-- Added missing closing brace here
+
+    getInteractionInfo() {
+        return {
+            name: this.constructor.name,
+            type: 'module',
+            health: this.health,
+            quality: this.quality,
+            // Add more component-specific info
+        };
+    }
 }
 
 export class Cannon extends ShipComponent {
@@ -223,6 +282,10 @@ export class Cannon extends ShipComponent {
         // Base orientation relative to ship (used for mount position)
         this.baseRotation = r;  // Store the initial mounting angle
         this.rotation = 0;      // This will be for turret rotation
+
+        this.mountPosition = { x: 0, y: 37 };  // Mount position behind cannon
+        // Mount position is 10 units behind the cannon based on its orientation
+       
     }
 
     update(deltaTime) {
@@ -356,6 +419,9 @@ export class Cannon extends ShipComponent {
             });
         }
     }
+
+    
+    
 }
 
 // Update SteeringWheel to store bind position
@@ -366,7 +432,7 @@ export class SteeringWheel extends ShipComponent {
         this.currentTurn = 0; // -1 to 1
         this.position = { x: -50, y: 0 }; // Fixed position relative to ship
         this.rotation = 0; // Fixed rotation
-        this.bindPosition = { x: -50, y: 0 }; // Match position for binding
+        this.mountPosition = {x:-25, y:0} // Match position for binding
 
         // Custom physics shape for steering wheel
         this.physicsShape = {
@@ -374,6 +440,8 @@ export class SteeringWheel extends ShipComponent {
             width: 20,   // Width of steering wheel collision
             height: 40   // Height of steering wheel collision
         };
+
+        // Mount position is 10 units to the left of the wheel
     }
 
     update(deltaTime) {
@@ -406,6 +474,8 @@ export class SteeringWheel extends ShipComponent {
         
         ctx.restore();
     }
+
+    
 }
 
 export class Sail extends ShipComponent {
@@ -429,6 +499,15 @@ export class Sail extends ShipComponent {
                 height: 260,
                 collisionMask: 'SHIP_MODULE_NON_INTERACT'  // Fibers are non-interactive
             }
+        };
+
+        // Mount position is 10 units to the left of the mast
+        this.getMountPosition = () => {
+            const angle = this.worldRotation;
+            return {
+                x: Math.cos(angle + Math.PI/2) * -10,  // 10 units to the left relative to orientation
+                y: Math.sin(angle + Math.PI/2) * -10
+            };
         };
     }
 
@@ -674,6 +753,13 @@ export class Sail extends ShipComponent {
 
         ctx.restore();
     }
+
+    getMountPosition() {
+        return {
+            x: -10,      // 10 units to the left
+            y: 0         // Same vertical position
+        };
+    }
 }
 
 // SpeedSail and ShipCannon can now use the base bindToShip method
@@ -688,6 +774,5 @@ export class ShipCannon extends Cannon {
     constructor(shipId, quality, x, y, rotation, efficiency, id) {
         super(x, y, rotation, id, quality, efficiency);
         this.bindPosition = { x, y };
-        // Base rotation is already set from parent constructor
     }
 }

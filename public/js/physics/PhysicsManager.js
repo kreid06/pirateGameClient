@@ -228,6 +228,24 @@ export class PhysicsManager {
                point.y <= bounds.max.y;
     }
 
+    isBodyInRange(bodyA, bodyB, range) {
+        if (!bodyA || !bodyB) return false;
+
+        const dx = bodyA.position.x - bodyB.position.x;
+        const dy = bodyA.position.y - bodyB.position.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        console.log('[Physics] Range check:', {
+            bodyALabel: bodyA.label,
+            bodyBLabel: bodyB.label,
+            distance: distance.toFixed(2),
+            range,
+            inRange: distance <= range
+        });
+
+        return distance <= range;
+    }
+
     cleanup() {
         // ...existing cleanup code...
         this.constraints.forEach((constraint, id) => {

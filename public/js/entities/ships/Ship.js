@@ -147,7 +147,7 @@ export class Ship {
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_hull_${this.id}`,
+                label: `ship_hull_${this.id}`,  // Clean ID format
                 isStatic: false,  // Make dynamic
                 mass: this.physics.mass,
                 friction: this.physics.friction,
@@ -170,7 +170,7 @@ export class Ship {
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_sensor_${this.id}`,
+                label: `ship_sensor_${this.id}`,  // Clean ID format
                 isStatic: false,  // Make dynamic
                 isSensor: true,
                 collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_SENSOR'),
@@ -267,7 +267,7 @@ export class Ship {
  
             this.modules.forEach(module => {
                 if(module instanceof Sail){
-                    console.log(`sail detected`);
+                    // console.log(`sail detected`);
                     module.renderPhysicsDebug(ctx);
                 }else{
                     module.renderPhysicsDebug(ctx);
@@ -354,6 +354,11 @@ export class Ship {
             }
         });
     }
+
+    generateModuleId() {
+        // Use consistent format for module IDs
+        return `${this.id}_module_${Math.random().toString(36).substr(2, 6)}`;
+    }
 }
 
 export class Brigantine extends Ship {
@@ -371,10 +376,6 @@ export class Brigantine extends Ship {
             { x: -225, y: 95 }
         ];
         this.initModules();
-    }
-
-    generateModuleId() {
-        return Math.random().toString(36).substr(2, 9);
     }
 
     initModules() {

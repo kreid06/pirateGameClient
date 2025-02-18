@@ -30,6 +30,9 @@ export class GameClient {
         this.lastTime = 0;
         this.targetDelta = 1000/60;  // Target 60 FPS
         this.running = false;  // Don't start until initialized
+        this.hoveredModule = null;
+        this.lastModuleInteraction = 0;
+        this.moduleInteractionCooldown = 1000; // 1 second cooldown
     }
 
     async init() {
@@ -93,6 +96,100 @@ export class GameClient {
             }
         });
         */
+
+        window.addEventListener('mousemove', (e) => {
+            if (!this.gameState?.ready) return;
+            
+            // Check each ship for module hover
+            let foundModule = null;
+            this.gameState.ships.forEach(ship => {
+                const module = this.renderSystem.checkModuleHover(
+                    { x: e.clientX, y: e.clientY },
+                    ship
+                );
+                if (module) {
+                    foundModule = module;
+                    // console.log('[GameClient] Module hover:', {
+                    //     moduleId: module.id,
+                    //     moduleType: module.constructor.name,
+                    //     shipId: ship.id,
+                    //     position: module.worldPosition
+                    // });
+                }
+            });
+
+            // Update hovered module
+            if (foundModule !== this.hoveredModule) {
+                if (this.hoveredModule) {
+                    // Clear previous hover
+                    this.gameState.hud.clearModuleInfo();
+                }
+                this.hoveredModule = foundModule;
+                if (foundModule) {
+                    // Show new module info
+                    const canMount = this.gameState.player.state.isBoarded &&
+                                   this.gameState.player.state.boardedShipId === foundModule.ship.id;
+                    this.gameState.hud.showModuleInfo(foundModule, canMount);
+                }
+            }
+        });
+
+        window.addEventListener('mouseout', () => {
+            if (this.hoveredModule) {
+                this.gameState.hud.clearModuleInfo();
+                this.hoveredModule = null;
+            }
+        });
+
+        window.addEventListener('moduleInteract', (event) => {
+            if (!this.gameState?.player) return;
+            
+            const now = Date.now();
+            if (now - this.lastModuleInteraction < this.moduleInteractionCooldown) {
+                console.log('[GameClient] Module interaction on cooldown:', {
+                    timeLeft: ((this.moduleInteractionCooldown - (now - this.lastModuleInteraction)) / 1000).toFixed(1) + 's'
+                });
+                return;
+            }
+
+            this.lastModuleInteraction = now;
+            const player = this.gameState.player;
+
+            // If already mounted, only handle unmounting
+            if (player.state.mountedModule) {
+                console.log('[GameClient] Unmounting from module:', {
+                    moduleId: player.state.mountedModule.id,
+                    moduleType: player.state.mountedModule.constructor.name
+                });
+                player.unmountModule();
+                return;
+            }
+
+            // Otherwise try to mount if hovering over a module
+            if (this.hoveredModule) {
+                const module = this.hoveredModule;
+                const dx = player.position.x - module.worldPosition.x;
+                const dy = player.position.y - module.worldPosition.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                console.log('[GameClient] Attempting module mount:', {
+                    moduleId: module.id,
+                    moduleType: module.constructor.name,
+                    distance: distance.toFixed(1),
+                    playerPos: { x: player.position.x.toFixed(1), y: player.position.y.toFixed(1) },
+                    modulePos: { x: module.worldPosition.x.toFixed(1), y: module.worldPosition.y.toFixed(1) }
+                });
+
+                if (player.state.canInteractWithModule) {
+                    player.mountModule(module);
+                } else {
+                    console.log('[GameClient] Cannot mount: Too far from module', {
+                        distance: distance.toFixed(1),
+                        requiredDistance: module.getInteractionRadius()
+                    });
+                }
+            }
+        });
     }
 
     gameLoop(timestamp) {

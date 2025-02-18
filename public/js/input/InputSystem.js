@@ -6,39 +6,108 @@ export class InputSystem {
         this.debugKeyPressed = false;
         this.lastJumpTime = 0;
         this.jumpCooldown = 500; // ms between jumps
+
+        // Add key state tracking
+        this.keyStates = {
+            forward: false,
+            backward: false,
+            strafeLeft: false,
+            strafeRight: false,
+            interact: false,
+            jump: false
+        };
+
+        this.lastInteractTime = 0;
+        this.interactCooldown = 1000; // 1 second cooldown
+
+        // Add cooldown tracking
+        this.keyCooldowns = {
+            interact: { cooldown: 1000, lastUsed: 0 },
+            jump: { cooldown: 1000, lastUsed: 0 },
+            debug: { cooldown: 500, lastUsed: 0 }
+        };
+
+        // Movement keys don't need cooldowns
+        this.movementKeys = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+
         this.setupListeners();
+    }
+
+    handleKeyCooldown(action) {
+        const cooldownInfo = this.keyCooldowns[action];
+        if (!cooldownInfo) return true; // No cooldown defined
+
+        const now = Date.now();
+        const timeSinceLastUse = now - cooldownInfo.lastUsed;
+
+        if (timeSinceLastUse < cooldownInfo.cooldown) {
+            console.log(`[Input] ${action} on cooldown:`, {
+                timeLeft: ((cooldownInfo.cooldown - timeSinceLastUse) / 1000).toFixed(1) + 's'
+            });
+            return false;
+        }
+
+        cooldownInfo.lastUsed = now;
+        return true;
     }
 
     setupListeners() {
         window.addEventListener('keydown', (e) => {
-            this.keys.set(e.code, true);  // Use set instead of add
-            
-            // Toggle debug draw on 'T' press
-            if (e.code === 'KeyT' && !this.debugKeyPressed) {
-                this.debugKeyPressed = true;
-                window.dispatchEvent(new CustomEvent('toggleDebugDraw'));
+            if (e.repeat) return;
+
+            // Movement keys have no cooldown
+            if (this.movementKeys.includes(e.code)) {
+                switch (e.code) {
+                    case 'KeyW': this.keyStates.forward = true; break;
+                    case 'KeyS': this.keyStates.backward = true; break;
+                    case 'KeyA': this.keyStates.strafeLeft = true; break;
+                    case 'KeyD': this.keyStates.strafeRight = true; break;
+                }
+                return;
             }
 
-            if (e.code === 'Space') {
-                const now = Date.now();
-                const cooldownLeft = this.jumpCooldown - (now - this.lastJumpTime);
-                console.log('[Input] Space pressed:', {
-                    time: new Date(now).toLocaleTimeString(),
-                    cooldown: cooldownLeft > 0 ? `${(cooldownLeft/1000).toFixed(1)}s` : 'READY'
-                });
-                
-                if (now - this.lastJumpTime >= this.jumpCooldown) {
-                    this.lastJumpTime = now;
-                    window.dispatchEvent(new CustomEvent('playerJump'));
-                }
+            switch (e.code) {
+                case 'KeyE':
+                    if (this.handleKeyCooldown('interact')) {
+                        this.keyStates.interact = true;
+                        window.dispatchEvent(new Event('moduleInteract'));
+                        // Immediately reset interact state
+                        setTimeout(() => {
+                            this.keyStates.interact = false;
+                        }, 50);
+                    }
+                    break;
+
+                case 'Space':
+                    if (this.handleKeyCooldown('jump')) {
+                        this.keyStates.jump = true;
+                        window.dispatchEvent(new Event('playerJump'));
+                    }
+                    break;
+
+                case 'KeyT':
+                    if (this.handleKeyCooldown('debug')) {
+                        this.debugKeyPressed = true;
+                        window.dispatchEvent(new CustomEvent('toggleDebugDraw'));
+                    }
+                    break;
             }
+
+            this.keys.set(e.code, true);
         });
 
         window.addEventListener('keyup', (e) => {
-            this.keys.set(e.code, false);  // Set false instead of delete
-            if (e.code === 'KeyT') {
-                this.debugKeyPressed = false;
+            // Only handle movement keys on keyup
+            switch (e.code) {
+                case 'KeyW': this.keyStates.forward = false; break;
+                case 'KeyS': this.keyStates.backward = false; break;
+                case 'KeyA': this.keyStates.strafeLeft = false; break;
+                case 'KeyD': this.keyStates.strafeRight = false; break;
+                case 'Space': this.keyStates.jump = false; break;
+                case 'KeyT': this.debugKeyPressed = false; break;
             }
+
+            this.keys.set(e.code, false);
         });
 
         window.addEventListener('mousemove', (e) => {
@@ -56,19 +125,38 @@ export class InputSystem {
                 }
             }
         });
+
+        // Add mouse move for hover detection
+        window.addEventListener('mousemove', (e) => {
+            this.mousePos = { x: e.clientX, y: e.clientY };
+        });
+
+        // Handle module interaction (mounting/unmounting)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'e' || e.key === 'E') {
+                console.log('[Input] Module interaction key pressed');
+                const event = new CustomEvent('moduleInteract', {
+                    detail: {
+                        type: 'toggle',  // Will handle both mount and unmount
+                        timestamp: Date.now()
+                    }
+                });
+                window.dispatchEvent(event);
+            }
+        });
     }
 
     getInput(playerPos, viewport) {
-        // Convert mouse position to world coordinates
-        const worldMousePos = this.getWorldMousePosition(playerPos, viewport);
-        
-        return {
-            mousePos: worldMousePos,
-            forward: this.keys.get('KeyW') || false,
-            backward: this.keys.get('KeyS') || false,
-            strafeLeft: this.keys.get('KeyA') || false,
-            strafeRight: this.keys.get('KeyD') || false
+        // Use key states for movement input
+        const input = {
+            forward: this.keyStates.forward,
+            backward: this.keyStates.backward,
+            strafeLeft: this.keyStates.strafeLeft,
+            strafeRight: this.keyStates.strafeRight,
+            mousePos: this.getWorldMousePosition(playerPos, viewport)  // Fix method name here
         };
+
+        return input;
     }
 
     getWorldMousePosition(playerPos, viewport) {

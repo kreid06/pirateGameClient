@@ -1,0 +1,45 @@
+.module-tooltip {
+    position: fixed;
+    background: rgba(0, 0, 0, 0.85);
+    color: white;
+    padding: 12px;
+    border-radius: 5px;
+    z-index: 1000;
+    min-width: 200px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    pointer-events: none; 
+    transition: opacity 0.2s ease;
+}
+
+.module-tooltip h3 {
+    margin: 0 0 8px 0;
+    color: #4CAF50;
+}
+
+.module-stats {
+    position: relative;
+    margin: 8px 0;
+}
+
+.health-bar {
+    height: 4px;
+    border-radius: 2px;
+    margin-bottom: 8px;
+}
+
+.interact-prompt {
+    display: block;
+    margin-top: 8px;
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.module-info {
+    font-size: 12px;
+    color: #888;
+    margin: 4px 0;
+}
+
+.module-id, .ship-id {
+    margin: 2px 0;
+}

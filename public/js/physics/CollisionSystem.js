@@ -11,15 +11,16 @@ export class CollisionSystem {
             SHIP_DETECT: 0x0020,
             SHIP_MODULE: 0x0040,
             SHIP_MODULE_NON_INTERACT: 0x0080,
-            PROJECTILES: 0x0100
+            PROJECTILES: 0x0100,
+            MODULE_INTERACT: 0x0200,  // New category for module interaction
+            PLAYER_MOUNTED: 0x0400  // Add new category for mounted state
         };
 
         // Add collision groups
         this.groups = {
             NONE: 0,              // Use category/mask rules
             PLAYERS: 1,           // Players collide with each other
-            BOARDED_PLAYERS: 2,           // Mounted players collide with each other
-            SHIPS: 3,            // Ships collide with each other
+            SHIPS: 2,            // Ships collide with each other
             BOUNDARIES: -1,        // Boundaries never collide with each other
             SHIP_MODULES: -2,      // Ship modules never collide with each other
         };
@@ -33,7 +34,7 @@ export class CollisionSystem {
             PLAYER_JUMPED: {
                 category: this.categories.PLAYER_JUMPED,
                 mask: this.categories.SHIP_HULL,
-                group: this.groups.NONE  // Use categories/masks when jumping
+                group: this.groups.PLAYERS // Use categories/masks when jumping
             },
             SHIP_HULL: {
                 category: this.categories.SHIP_HULL,
@@ -42,8 +43,8 @@ export class CollisionSystem {
             },
             BOARDED_PLAYER: {
                 category: this.categories.BOARDED_PLAYER,
-                mask: this.categories.SHIP_DETECT | this.categories.SHIP_MODULE,  // Must detect ship sensors
-                group: this.groups.BOARDED_PLAYERS  // Mounted players don't collide
+                mask: this.categories.SHIP_DETECT | this.categories.SHIP_MODULE | this.categories.MODULE_INTERACT,  // Must detect ship sensors
+                group: this.groups.PLAYERS 
             },
             SHIP_DETECT: {
                 category: this.categories.SHIP_DETECT,
@@ -64,6 +65,16 @@ export class CollisionSystem {
                 category: this.categories.SHIP_MODULE_NON_INTERACT,
                 mask: 0, // Doesn't collide with anything
                 group: this.groups.NONE
+            },
+            PROJECTILES: {
+                category: this.categories.PROJECTILES,
+                mask: this.categories.SHIP_HULL,
+                group: this.groups.NONE
+            },
+            PLAYER_MOUNTED: {
+                category: this.categories.PLAYER_MOUNTED,
+                mask: this.categories.SHIP_DETECT | this.categories.MODULE_INTERACT,  // Add SHIP_MODULE
+                group: this.groups.PLAYERS 
             }
         };
 
@@ -82,6 +93,9 @@ export class CollisionSystem {
 
         // Track most recent collisions per body
         this.recentCollisions = new Map();
+
+        // Add module interaction tracking
+        this.moduleInteractions = new Map();
     }
 
     setCurrentPlayer(player) {
@@ -146,9 +160,11 @@ export class CollisionSystem {
         if (!body?.label) return null;
 
         const parts = body.label.split('_');
-        // Handle both ship_hull_123 and ship_sensor_123 formats
+        // Standardize: always return the clean ship ID without prefixes
         if (parts.length >= 3 && (parts[0] === 'ship')) {
-            return parts[parts.length - 1]; // Always get last part as ID
+            const rawId = parts[parts.length - 1];
+            // Ensure consistent format: remove any 'static_' prefix
+            return rawId.replace('static_', '');
         }
         return null;
     }
@@ -294,17 +310,6 @@ export class CollisionSystem {
             }
         }
 
-        console.log('[Collision] Active collisions for body:', {
-            bodyId: targetBody.id,
-            bodyLabel: targetBody.label,
-            collisionCount: activeCollisions.length,
-            collisions: activeCollisions.map(b => ({
-                id: b.id,
-                label: b.label,
-                category: b.collisionFilter?.category?.toString(16)
-            }))
-        });
-
         return activeCollisions;
     }
 
@@ -334,5 +339,72 @@ export class CollisionSystem {
         if (listenerB?.onCollisionEnd) {
             listenerB.onCollisionEnd(bodyA);
         }
+    }
+
+    isPlayerNearModule(playerBody, moduleBody) {
+        if (!playerBody || !moduleBody) {
+            console.log('[Collision] Invalid bodies for module proximity check:', {
+                hasPlayerBody: !!playerBody,
+                hasModuleBody: !!moduleBody
+            });
+            return false;
+        }
+
+        // Get interaction radius from module type
+        const moduleType = moduleBody.label.split('_')[1] || 'unknown';
+        const interactionRadius = this.getModuleInteractionRadius(moduleType, moduleBody.plugin?.component);
+
+        const isInRange = this.physicsManager.isBodyInRange(playerBody, moduleBody, interactionRadius);
+
+        console.log('[Collision] Module proximity check:', {
+            moduleType,
+            playerLabel: playerBody.label,
+            moduleLabel: moduleBody.label,
+            interactionRadius,
+            isInRange
+        });
+
+        return isInRange;
+    }
+
+    getModuleInteractionRadius(moduleType, component) {
+        // Base interaction distances
+        const distances = {
+            cannon: 40,
+            steering: 35,
+            sail: 45,
+            default: 35
+        };
+
+        // Check component type if available
+        if (component?.getInteractionRadius) {
+            return component.getInteractionRadius();
+        }
+
+        // Fallback to type-based distances
+        moduleType = moduleType.toLowerCase();
+        if (moduleType.includes('cannon')) return distances.cannon;
+        if (moduleType.includes('steer')) return distances.steering;
+        if (moduleType.includes('sail')) return distances.sail;
+        
+        return distances.default;
+    }
+
+    checkModuleInteraction(playerId, moduleId) {
+        const interaction = this.moduleInteractions.get(playerId);
+        if (!interaction) {
+            console.log('[Collision] No active interaction for player:', playerId);
+            return null;
+        }
+        
+        const isValid = interaction.moduleId === moduleId;
+        console.log('[Collision] Module interaction check:', {
+            playerId,
+            moduleId,
+            currentInteraction: interaction,
+            isValid
+        });
+        
+        return isValid ? interaction : null;
     }
 }

@@ -1,5 +1,6 @@
 import { GameMap } from './map.js';  // Update import
 import { GAME_CONSTANTS } from '../core/constants.js';
+import { Cannon, SteeringWheel, Sail } from '../entities/components/Component.js';
 
 export const RENDER_LAYERS = {
     BACKGROUND: 0,
@@ -175,6 +176,37 @@ export class RenderSystem {
 
         // Prevent blurry rendering
         this.ctx.imageSmoothingEnabled = true;
+    }
+
+    screenToWorldPosition(screenX, screenY) {
+        return {
+            x: screenX - this.viewport.center.x + this.camera.x,
+            y: screenY - this.viewport.center.y + this.camera.y
+        };
+    }
+
+    checkModuleHover(mousePos, ship) {
+        if (!ship || !mousePos) return null;
+
+        // Convert screen coordinates to world space
+        const worldPos = this.screenToWorldPosition(mousePos.x, mousePos.y);
+
+        // Iterate through ship modules
+        for (const module of ship.modules.values()) {
+            const dx = worldPos.x - (module.worldPosition.x);
+            const dy = worldPos.y - (module.worldPosition.y);
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // Different hit areas for different module types
+            const hitArea = module instanceof Cannon ? 40 :
+                          module instanceof SteeringWheel ? 25 :
+                          module instanceof Sail ? 35 : 30;
+
+            if (distance <= hitArea) {
+                return module;
+            }
+        }
+        return null;
     }
 
     // Add other rendering methods...

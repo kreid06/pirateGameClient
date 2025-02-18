@@ -53,7 +53,9 @@ export class Player {
             boardedShipId: null,    // Add this to track ship ID
             currentCollisionCategory: 'PLAYER',
             lastShipDetection: 0,  // Add timestamp for ship detection
-            shipDetectionTimeout: 1000  // 1 second timeout
+            shipDetectionTimeout: 1000,  // 1 second timeout
+            mountedModule: null,
+            canInteractWithModule: true
         };
 
         this.init();
@@ -231,6 +233,19 @@ export class Player {
                     console.log('[Player] Initiating unboard from sensor timeout');
                     this.unboardShip('sensor_timeout');
                 }
+            }
+
+            // Check for nearby modules when boarded
+            const nearbyModule = this.checkNearbyModules();
+            this.state.canInteractWithModule = !!nearbyModule;
+            
+            if (nearbyModule) {
+                window.dispatchEvent(new CustomEvent('moduleNearby', {
+                    detail: {
+                        module: nearbyModule,
+                        canMount: true
+                    }
+                }));
             }
         }
 
@@ -629,9 +644,9 @@ export class Player {
         this.setCollisionCategory('BOARDED_PLAYER');
     }
 
-    unboardShip(shipId) {
+    unboardShip(reason) {
         console.log('[Player] Unboarding ship:', {
-            requestedShipId: shipId,
+            requestedShipId: reason,
             currentShipId: this.state.boardedShipId,
             playerPos: this.position,
             currentCategory: this.state.currentCollisionCategory,
@@ -639,13 +654,161 @@ export class Player {
         });
         
         // Only unboard if this is our current ship or we're forcing unboard
-        if (shipId === this.state.boardedShipId || shipId === 'force') {
-            this.state.isBoarded = false;
-            this.state.boardedShipId = null;
-            this.state.lastShipDetection = 0;
-            this.returnToNormalState();
-        } else {
-            console.log(`[Player] Ignoring unboard request: wrong ship (current: ${this.state.boardedShipId}, requested: ${shipId})`);
+        if (this.state.mountedModule) {
+            this.unmountModule();
         }
+        this.state.isBoarded = false;
+        this.state.boardedShipId = null;
+        this.state.lastShipDetection = 0;
+        this.returnToNormalState();
+    }
+
+    checkNearbyModules() {
+        if (!this.physicsBody || !this.state.boardedShipId) {
+            console.log('[Player] Cannot check modules:', {
+                hasPhysicsBody: !!this.physicsBody,
+                boardedShipId: this.state.boardedShipId
+            });
+            return null;
+        }
+        
+        const ship = this.getShipById(this.state.boardedShipId);
+        if (!ship) {
+            console.log('[Player] Cannot find boarded ship:', this.state.boardedShipId);
+            return null;
+        }
+
+        // Find nearest module within interaction range
+        let nearestModule = null;
+        let shortestDistance = Infinity;
+
+        for (const module of ship.modules.values()) {
+            if (!module.physicsBody) continue;
+
+            // Use physics manager's range check
+            const isNear = this.physicsManager.isBodyInRange(
+                this.physicsBody,
+                module.physicsBody,
+                module.getInteractionRadius?.() || 40 // Default radius if not specified
+            );
+
+            if (isNear) {
+                const distance = Math.hypot(
+                    this.position.x - module.worldPosition.x,
+                    this.position.y - module.worldPosition.y
+                );
+
+                if (distance < shortestDistance) {
+                    shortestDistance = distance;
+                    nearestModule = module;
+                }
+            }
+        }
+
+        if (nearestModule) {
+            console.log('[Player] Found interactable module:', {
+                moduleId: nearestModule.id,
+                moduleType: nearestModule.constructor.name,
+                distance: shortestDistance.toFixed(2)
+            });
+        }
+
+        return nearestModule;
+    }
+
+    mountModule(module) {
+        console.log('[Player] Attempting to mount module:', {
+            playerState: {
+                isBoarded: this.state.isBoarded,
+                shipId: this.state.boardedShipId,
+                currentCategory: this.state.currentCollisionCategory
+            },
+            module: {
+                id: module?.id,
+                type: module?.constructor.name,
+                shipId: module?.ship?.id
+            }
+        });
+
+        if (!this.state.isBoarded || !module) {
+            console.warn('[Player] Mount failed: Not boarded or invalid module');
+            return false;
+        }
+        
+        // Verify module belongs to current ship
+        if (module.ship.id !== this.state.boardedShipId) {
+            console.warn('[Player] Mount failed: Module belongs to different ship', {
+                moduleShipId: module.ship.id,
+                playerShipId: this.state.boardedShipId
+            });
+            return false;
+        }
+
+        // Get mount offset from module
+        const mountOffset = module.getMountPosition();
+        
+        // Calculate final world position
+        const mountPos = {
+            x: module.worldPosition.x + mountOffset.x,
+            y: module.worldPosition.y + mountOffset.y
+        };
+
+        console.log('[Player] Mounting position calculation:', {
+            modulePos: module.worldPosition,
+            mountOffset,
+            finalPos: mountPos,
+            moduleRotation: module.worldRotation
+        });
+
+        // Set player position and make static
+        Body.setStatic(this.physicsBody, true);
+        Body.setPosition(this.physicsBody, mountPos);
+        Body.setAngle(this.physicsBody, module.worldRotation); // Match module's rotation
+
+        // Change collision category to mounted
+        this.setCollisionCategory('PLAYER_MOUNTED');
+        this.state.mountedModule = module;
+
+        return true;
+    }
+
+    unmountModule() {
+        console.log('[Player] Attempting to unmount from module:', {
+            moduleId: this.state.mountedModule?.id,
+            currentCategory: this.state.currentCollisionCategory,
+            isStatic: this.physicsBody?.isStatic,
+            filter: this.physicsBody?.collisionFilter
+        });
+
+        if (!this.state.mountedModule) {
+            console.warn('[Player] Unmount failed: Not mounted to any module');
+            return;
+        }
+        
+        // Return to normal boarded state
+        Body.setStatic(this.physicsBody, false);
+        this.setCollisionCategory('BOARDED_PLAYER');  // Change back to BOARDED_PLAYER
+
+        const previousModule = this.state.mountedModule;
+        this.state.mountedModule = null;
+
+        console.log('[Player] Module unmounted successfully:', {
+            previousModuleId: previousModule.id,
+            newCategory: this.state.currentCollisionCategory,
+            isStatic: this.physicsBody.isStatic,
+            filter: this.physicsBody.collisionFilter
+        });
+    }
+
+    getShipById(shipId) {
+        if (!this.physicsManager) return null;
+        
+        // Assuming GameState's ships Map is accessible through physicsManager
+        const ships = Array.from(this.physicsManager.world.bodies)
+            .filter(body => body.label.startsWith('ship_hull'))
+            .map(body => body.plugin?.ship)
+            .filter(ship => ship?.id === shipId);
+
+        return ships[0] || null;
     }
 }

@@ -63,11 +63,10 @@ export class GameState {
     }
 
     addStaticShips() {
-        // Add multiple ships for testing
         const shipConfigs = [
-            { x: -500, y: 0, r: 0, id: 'static_ship_1' },
-            { x: 500, y: 300, r: Math.PI / 4, id: 'static_ship_2' },
-            { x: -200, y: -400, r: -Math.PI / 6, id: 'static_ship_3' }
+            { x: -500, y: 0, r: 0, id: '1' },           // Simplified IDs
+            { x: 500, y: 300, r: Math.PI / 4, id: '2' },
+            { x: -200, y: -400, r: -Math.PI / 6, id: '3' }
         ];
 
         shipConfigs.forEach(config => {
@@ -75,16 +74,15 @@ export class GameState {
                 config.x,
                 config.y,
                 config.r,
-                config.id
+                config.id  // Use clean ID
             );
             
             this.ships.set(ship.id, ship);
             ship.createPhysicsBody(this.physicsManager);
             
-            console.log('[GameState] Added static ship:', {
+            console.log('[GameState] Added ship:', {
                 id: ship.id,
                 position: ship.position,
-                rotation: ship.rotation,
                 physics: !!ship.physicsBody
             });
         });
