@@ -147,16 +147,29 @@ export class InputSystem {
     }
 
     getInput(playerPos, viewport) {
-        // Use key states for movement input
-        const input = {
+        // Check if player is mounted - if so, only return mouse position
+        if (this.state?.playerState?.mountedModule) {
+            return {
+                forward: false,
+                backward: false,
+                strafeLeft: false,
+                strafeRight: false,
+                mousePos: this.getWorldMousePosition(playerPos, viewport)
+            };
+        }
+
+        // Otherwise return normal movement input
+        return {
             forward: this.keyStates.forward,
             backward: this.keyStates.backward,
             strafeLeft: this.keyStates.strafeLeft,
             strafeRight: this.keyStates.strafeRight,
-            mousePos: this.getWorldMousePosition(playerPos, viewport)  // Fix method name here
+            mousePos: this.getWorldMousePosition(playerPos, viewport)
         };
+    }
 
-        return input;
+    setState(state) {
+        this.state = state;
     }
 
     getWorldMousePosition(playerPos, viewport) {

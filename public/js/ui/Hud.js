@@ -63,6 +63,7 @@ export class Hud {
 
     getPlayerStatus() {
         const state = this.state.playerState;
+        if (state.mountedModule) return `🎯 MOUNTED TO ${state.mountedModule.constructor.name}`;
         if (state.isJumping) return '🦘 JUMPING';
         if (state.isBoarded) return '⚓ BOARDED';  // Updated text
         return '🏃 GROUNDED';
@@ -72,6 +73,11 @@ export class Hud {
         const state = this.state.playerState;
         const now = Date.now();
         const timeLeft = Math.max(0, state.lastJumpTime + state.jumpCooldown - now);
+        
+        // Add mounted state check first
+        if (state.mountedModule) {
+            return `${state.mountedModule.constructor.name} CONTROLS`;
+        }
         
         if (state.isJumping) {
             // Calculate remaining jump time
@@ -113,7 +119,11 @@ export class Hud {
                 <p>Quality: ${module.quality.toFixed(1)}x</p>
                 ${module.efficiency ? `<p>Efficiency: ${module.efficiency.toFixed(1)}x</p>` : ''}
             </div>
-            ${canInteract ? '<span class="interact-prompt">Press E to mount</span>' : ''}
+            ${canInteract ? 
+                (this.state.playerState?.mountedModule === module ? 
+                    '<span class="interact-prompt">Press E to unmount</span>' :
+                    '<span class="interact-prompt">Press E to mount</span>'
+                ) : ''}
         `;
 
         // Position tooltip in lower right corner with padding

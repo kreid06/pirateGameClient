@@ -198,7 +198,8 @@ export class GameClient {
         const deltaTime = Math.min(timestamp - this.lastTime, this.targetDelta);
         this.lastTime = timestamp;
 
-        // Get input with mouse position relative to viewport
+        // Update input system with player state and get input once
+        this.inputSystem.setState(this.gameState);
         const input = this.inputSystem.getInput(
             this.gameState.worldPos,
             this.renderSystem.viewport
