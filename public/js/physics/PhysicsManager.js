@@ -14,18 +14,48 @@ export class PhysicsManager {
         this.fixedTimeStep = 1000/60;
         this.accumulator = 0;
 
-        // Set up collision events
+        // Set up all collision events
         Events.on(this.engine, 'collisionStart', (event) => {
             event.pairs.forEach(pair => {
-                console.log('[Physics] Collision:', {
+                // Handle all collision types for initial contact
+                console.log('[Physics] Collision Start:', {
                     bodyA: pair.bodyA.label,
                     bodyB: pair.bodyB.label,
-                    categoryA: pair.bodyA.collisionFilter?.category,
-                    categoryB: pair.bodyB.collisionFilter?.category
+                    categoryA: pair.bodyA.collisionFilter?.category?.toString(16),
+                    categoryB: pair.bodyB.collisionFilter?.category?.toString(16)
                 });
-                this.collisionSystem.handleCollision(pair.bodyA, pair.bodyB);
+                this.collisionSystem.handleCollisionStart(pair.bodyA, pair.bodyB);
             });
         });
+
+        Events.on(this.engine, 'collisionActive', (event) => {
+            event.pairs.forEach(pair => {
+                // Only process sensor collisions during active state
+                if (this.isSensorCollision(pair.bodyA, pair.bodyB)) {
+                    this.collisionSystem.handleCollisionActive(pair.bodyA, pair.bodyB);
+                }
+            });
+        });
+
+        Events.on(this.engine, 'collisionEnd', (event) => {
+            event.pairs.forEach(pair => {
+                // Only process sensor collision endings
+                if (this.isSensorCollision(pair.bodyA, pair.bodyB)) {
+                    console.log('[Physics] Sensor Collision End:', {
+                        bodyA: pair.bodyA.label,
+                        bodyB: pair.bodyB.label
+                    });
+                    this.collisionSystem.handleCollisionEnd(pair.bodyA, pair.bodyB);
+                }
+            });
+        });
+    }
+
+    isSensorCollision(bodyA, bodyB) {
+        // Check if either body is a sensor or has sensor-related categories
+        return bodyA.isSensor || bodyB.isSensor || 
+               bodyA.collisionFilter?.category === this.collisionSystem.categories.SHIP_DETECT ||
+               bodyB.collisionFilter?.category === this.collisionSystem.categories.SHIP_DETECT;
     }
 
     addBody(id, body, options = {}) {

@@ -1,3 +1,5 @@
+import { Player } from '../entities/player/Player.js';
+
 export class CollisionSystem {
     constructor() {
         this.categories = {
@@ -36,7 +38,7 @@ export class CollisionSystem {
             },
             BOARDED_PLAYER: {
                 category: this.categories.BOARDED_PLAYER,
-                mask: this.categories.SHIP_DETECT,  // Can only detect ship sensors
+                mask: this.categories.SHIP_DETECT,  // Must detect ship sensors
                 group: this.groups.BOARDED_PLAYERS  // Mounted players don't collide
             },
             SHIP_DETECT: {
@@ -46,16 +48,35 @@ export class CollisionSystem {
             },
             SHIP_SENSOR: {
                 category: this.categories.SHIP_DETECT,
-                mask: this.categories.BOARDED_PLAYER | this.categories.PLAYER_JUMPED,  // Detects both boarded and jumping players
+                mask: this.categories.BOARDED_PLAYER | this.categories.PLAYER_JUMPED,  // Must detect boarded players
                 group: this.groups.NONE
             }
         };
 
         this.collisions = new Map();
         this.bodies = new Map();
+
+        // Track active collisions with timestamps
+        this.activeCollisions = new Map();
+
+        // Add collision listeners map
+        this.collisionListeners = new Map();
+
+        // Add current player tracking
+        this.currentPlayerId = null;
+        this.currentPlayer = null;
     }
 
-    handleCollision(bodyA, bodyB) {
+    setCurrentPlayer(player) {
+        this.currentPlayerId = player.id;
+        this.currentPlayer = player;
+        console.log('[Collision] Set current player:', {
+            id: player.id,
+            label: player.physicsBody?.label
+        });
+    }
+
+    handleCollisionStart(bodyA, bodyB) {
         const key = this.getCollisionKey(bodyA, bodyB);
         if (this.collisions.has(key)) return;
 
@@ -63,11 +84,78 @@ export class CollisionSystem {
             bodyA,
             bodyB,
             startTime: Date.now(),
+            lastActiveTime: Date.now(),
             type: this.getCollisionType(bodyA, bodyB)
         };
 
         this.collisions.set(key, collision);
-        this.processCollision(collision);
+        this.activeCollisions.set(key, collision);
+    }
+
+    handleCollisionActive(bodyA, bodyB) {
+        const key = this.getCollisionKey(bodyA, bodyB);
+        const collision = this.activeCollisions.get(key);
+        
+        if (collision && (bodyA.isSensor || bodyB.isSensor)) {
+            collision.lastActiveTime = Date.now();
+            
+            console.log('[Collision] Sensor active:', {
+                key,
+                duration: Date.now() - collision.startTime,
+                bodyA: bodyA.label,
+                bodyB: bodyB.label,
+                categoryA: bodyA.collisionFilter?.category?.toString(16),
+                categoryB: bodyB.collisionFilter?.category?.toString(16)
+            });
+        }
+    }
+
+    getShipIdFromBody(body) {
+        if (!body?.label) return null;
+
+        const parts = body.label.split('_');
+        // Handle both ship_hull_123 and ship_sensor_123 formats
+        if (parts.length >= 3 && (parts[0] === 'ship') && 
+            (parts[1] === 'hull' || parts[1] === 'sensor')) {
+                console.log(parts[4]);
+            return parts[4];
+        }
+        return null;
+    }
+
+    handleCollisionEnd(bodyA, bodyB) {
+        // Only handle sensor collision endings
+        if (!bodyA.isSensor && !bodyB.isSensor) return;
+        
+        const key = this.getCollisionKey(bodyA, bodyB);
+        const shipId = this.getShipIdFromBody(bodyA) || this.getShipIdFromBody(bodyB);
+        
+        console.log('[Collision] Sensor contact lost:', {
+            key,
+            bodyA: bodyA.label,
+            bodyB: bodyB.label,
+            shipId,
+            isPlayerA: bodyA.label.includes(`player_${this.currentPlayerId}`),
+            isPlayerB: bodyB.label.includes(`player_${this.currentPlayerId}`)
+        });
+
+        // Only process player collisions if it involves current player
+        if (bodyA.label.includes(`player_${this.currentPlayerId}`) || 
+            bodyB.label.includes(`player_${this.currentPlayerId}`)) {
+            
+            if (shipId && this.currentPlayer) {
+                console.log('[Collision] Current player lost ship contact:', {
+                    playerId: this.currentPlayerId,
+                    shipId,
+                    collisionKey: key
+                });
+                this.currentPlayer.unboardShip(`p_${shipId}`);
+            }
+        }
+        
+        this.collisions.delete(key);
+        this.activeCollisions.delete(key);
+        this.notifyCollisionEnd(bodyA, bodyB);
     }
 
     getCollisionType(bodyA, bodyB) {
@@ -104,9 +192,6 @@ export class CollisionSystem {
     debugCollisionState() {
   
      
-
-   
-       
     }
 
     willBodiesCollide(bodyA, bodyB) {
@@ -149,6 +234,7 @@ export class CollisionSystem {
         for (const [key, collision] of this.collisions.entries()) {
             if (collision.bodyA.id === id || collision.bodyB.id === id) {
                 this.collisions.delete(key);
+                this.activeCollisions.delete(key);
             }
         }
     }
@@ -159,9 +245,9 @@ export class CollisionSystem {
             return [];
         }
 
-        // Get all collisions involving this body
+        // Use active collisions instead of all collisions
         const activeCollisions = [];
-        for (const collision of this.collisions.values()) {
+        for (const collision of this.activeCollisions.values()) {
             if (collision.bodyA.id === targetBody.id) {
                 activeCollisions.push(collision.bodyB);
             } else if (collision.bodyB.id === targetBody.id) {
@@ -181,5 +267,33 @@ export class CollisionSystem {
         });
 
         return activeCollisions;
+    }
+
+    addCollisionListener(bodyId, callbacks) {
+        this.collisionListeners.set(bodyId, callbacks);
+        console.log('[Collision] Added listener for:', bodyId);
+    }
+
+    removeCollisionListener(bodyId) {
+        this.collisionListeners.delete(bodyId);
+    }
+
+    notifyCollisionEnd(bodyA, bodyB) {
+        const listenerA = this.collisionListeners.get(bodyA.id);
+        const listenerB = this.collisionListeners.get(bodyB.id);
+
+        console.log('[Collision] End notification:', {
+            bodyAId: bodyA.id,
+            bodyBId: bodyB.id,
+            hasListenerA: !!listenerA,
+            hasListenerB: !!listenerB
+        });
+
+        if (listenerA?.onCollisionEnd) {
+            listenerA.onCollisionEnd(bodyB);
+        }
+        if (listenerB?.onCollisionEnd) {
+            listenerB.onCollisionEnd(bodyA);
+        }
     }
 }

@@ -114,14 +114,14 @@ export class Ship {
             "-225 90"    // Stern top
         ].join(' '));
 
-        // Create main physical hull
+        // Create main physical hull with consistent ID format
         this.physicsBody = Bodies.fromVertices(
             this.position.x, 
             this.position.y, 
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_hull_${this.id}`,
+                label: `ship_hull_${this.id}`,  // Consistent format: ship_hull_[id]
                 isStatic: true,
                 isSensor: false,
                 friction: 0.1,
@@ -134,14 +134,14 @@ export class Ship {
             }
         );
 
-        // Create sensor duplicate with same shape
+        // Create sensor with matching ID format
         this.sensorHull = Bodies.fromVertices(
             this.position.x, 
             this.position.y, 
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_sensor_${this.id}`,
+                label: `ship_sensor_${this.id}`,  // Consistent format: ship_sensor_[id]
                 isStatic: true,
                 isSensor: true,  // This one is always a sensor
                 collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_SENSOR'),

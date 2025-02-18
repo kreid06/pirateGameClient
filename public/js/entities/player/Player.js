@@ -50,7 +50,7 @@ export class Player {
             jumpDuration: 500,
             jumpCooldown: 500,
             lastJumpTime: 0,
-            boardedShip: null,  // renamed from mountedShip
+            boardedShipId: null,    // Add this to track ship ID
             currentCollisionCategory: 'PLAYER',
             lastShipDetection: 0,  // Add timestamp for ship detection
             shipDetectionTimeout: 1000  // 1 second timeout
@@ -78,6 +78,33 @@ export class Player {
         this.physicsBody = body;
         this.physicsManager.addBody(this.id, body);
         
+        // Register as current player with collision system
+        this.physicsManager.collisionSystem.setCurrentPlayer(this);
+
+        // Subscribe to collision events with enhanced logging
+        this.physicsManager.collisionSystem.addCollisionListener(this.id, {
+            onCollisionEnd: (otherBody) => {
+                if (this.state.isBoarded && otherBody.label?.startsWith('ship_sensor')) {
+                    console.log('[Player] Lost contact event triggered:', {
+                        triggerType: 'collision_end',
+                        bodyId: otherBody.id,
+                        shipId: this.state.boardedShipId,
+                        sensorId: otherBody.label,
+                        playerState: {
+                            isBoarded: this.state.isBoarded,
+                            category: this.state.currentCollisionCategory
+                        }
+                    });
+                    
+                    const sensorShipId = otherBody.label?.split('_').pop();
+                    if (sensorShipId === this.state.boardedShipId) {
+                        console.log('[Player] Initiating unboard from collision end');
+                        this.unboardShip('collision_end');
+                    }
+                }
+            }
+        });
+
         console.log('[Player] Initialized:', {
             id: this.id,
             position: this.position,
@@ -177,14 +204,33 @@ export class Player {
         // Check if we've lost contact with the ship
         if (this.state.isBoarded) {
             const now = Date.now();
-            // Only check sensor collisions for ship detection
             const shipSensor = this.findShipSensor();
             
             if (shipSensor) {
                 this.state.lastShipDetection = now;
-            } else if (now - this.state.lastShipDetection > this.state.shipDetectionTimeout) {
-                console.log('[Player] Lost contact with ship sensor, falling off');
-                this.unboardShip();
+                console.log('[Player] Ship contact maintained:', {
+                    shipId: this.state.boardedShipId,
+                    sensorId: shipSensor.label,
+                    timeSinceLastCheck: now - this.state.lastShipDetection
+                });
+            } else {
+                const timeSinceLastDetection = now - this.state.lastShipDetection;
+                console.log('[Player] Ship contact check failed:', {
+                    triggerType: 'sensor_timeout',
+                    boardedShipId: this.state.boardedShipId,
+                    timeSinceLastDetection,
+                    timeout: this.state.shipDetectionTimeout,
+                    willFall: timeSinceLastDetection > this.state.shipDetectionTimeout,
+                    playerState: {
+                        position: this.position,
+                        category: this.physicsBody.collisionFilter?.category?.toString(16)
+                    }
+                });
+                
+                if (timeSinceLastDetection > this.state.shipDetectionTimeout) {
+                    console.log('[Player] Initiating unboard from sensor timeout');
+                    this.unboardShip('sensor_timeout');
+                }
             }
         }
 
@@ -245,6 +291,9 @@ export class Player {
         if (this.physicsManager && this.physicsBody) {
             this.physicsManager.removeBody(this.id);
             this.physicsBody = null;
+        }
+        if (this.physicsManager) {
+            this.physicsManager.collisionSystem.removeCollisionListener(this.id);
         }
     }
 
@@ -480,27 +529,66 @@ export class Player {
 
     findShipSensor() {
         const collisions = this.physicsManager.collisionSystem.getCollisionsForBody(this.physicsBody);
-        return collisions.find(body => body?.label?.startsWith('ship_sensor'));
+        const sensor = collisions.find(body => {
+            const sensorShipId = body?.label?.split('_').pop();
+            const isMatch = body?.label?.startsWith('ship_sensor') && 
+                          (!this.state.boardedShipId || sensorShipId === this.state.boardedShipId);
+            
+            console.log('[Player] Checking sensor collision:', {
+                bodyLabel: body?.label,
+                sensorShipId,
+                boardedShipId: this.state.boardedShipId,
+                isMatch,
+                category: body?.collisionFilter?.category?.toString(16),
+                group: body?.collisionFilter?.group
+            });
+            
+            return isMatch;
+        });
+
+        console.log('[Player] Ship sensor check result:', {
+            foundSensor: !!sensor,
+            sensorId: sensor?.label,
+            boardedShipId: this.state.boardedShipId,
+            totalCollisions: collisions.length,
+            isBoarded: this.state.isBoarded,
+            currentCategory: this.state.currentCollisionCategory
+        });
+        
+        return sensor;
     }
 
     boardShip(shipBody) {
+        const shipId = shipBody.label.split('_').pop(); // Extract ID from label
         console.log('[Player] Boarding ship:', {
-            shipId: shipBody.label,
+            shipId: shipId,
+            shipLabel: shipBody.label,
             previousCategory: this.state.currentCollisionCategory
         });
 
         this.state.isJumping = false;
         this.state.isBoarded = true;
-        this.state.boardedShip = shipBody;
+        this.state.boardedShipId = shipId;  // Store ship ID
         this.state.lastShipDetection = Date.now();
         this.setCollisionCategory('BOARDED_PLAYER');
     }
 
-    unboardShip() {
-        console.log('[Player] Unboarding ship');
-        this.state.isBoarded = false;
-        this.state.boardedShip = null;
-        this.state.lastShipDetection = 0;
-        this.returnToNormalState();
+    unboardShip(key = 'unknown') {
+        if(key.substring(2)==this.state.boardedShipId){
+            console.log('[Player] Unboarding ship:', {
+                key,
+                shipId: this.state.boardedShipId,
+                playerPos: this.position,
+                currentCategory: this.state.currentCollisionCategory,
+                timestamp: Date.now()
+            });
+
+            this.state.isBoarded = false;
+            this.state.boardedShipId = null;
+            this.state.lastShipDetection = 0;
+            this.returnToNormalState();
+        }else{
+            console.log(`[Player] failed to unboard ship: ${key.substring(2)} != ${this.state.boardedShipId}`);
+        }
     }
 }
