@@ -519,26 +519,53 @@ export class Player {
     findNearbyShip() {
         const collisions = this.physicsManager.collisionSystem.getCollisionsForBody(this.physicsBody);
         
-        // Sort collisions by most recent first if there are timestamps
-        const sortedCollisions = collisions.sort((a, b) => {
-            const timeA = a.lastActiveTime || 0;
-            const timeB = b.lastActiveTime || 0;
-            return timeB - timeA;
+        // Log all collisions first
+        console.log('[Player] All current collisions:', {
+            playerPos: this.position,
+            playerState: {
+                isJumping: this.state.isJumping,
+                isBoarded: this.state.isBoarded
+            },
+            totalCollisions: collisions.length,
+            collisionsList: collisions.map(body => ({
+                label: body.label,
+                id: body.id,
+                category: body.collisionFilter?.category?.toString(16),
+                isSensor: body.isSensor,
+                position: body.position,
+                timestamp: body.lastActiveTime || 'N/A',
+                distance: Math.hypot(
+                    body.position.x - this.position.x,
+                    body.position.y - this.position.y
+                )
+            }))
         });
 
-        // Find the most recent ship hull collision
-        const nearbyShip = sortedCollisions.find(body => {
-            const isShip = body?.label?.startsWith('ship_hull');
-            if (isShip) {
-                console.log('[Player] Found nearby ship:', {
-                    shipLabel: body.label,
-                    timestamp: body.lastActiveTime
-                });
-            }
-            return isShip;
-        });
+        // Filter ship hulls and sort by distance
+        const shipCollisions = collisions
+            .filter(body => body?.label?.startsWith('ship_hull'))
+            .map(body => ({
+                body,
+                distance: Math.hypot(
+                    body.position.x - this.position.x,
+                    body.position.y - this.position.y
+                )
+            }))
+            .sort((a, b) => a.distance - b.distance);
 
-        return nearbyShip;
+        if (shipCollisions.length > 0) {
+            const nearestShip = shipCollisions[0].body;
+            console.log('[Player] Selected nearest ship:', {
+                shipLabel: nearestShip.label,
+                shipId: nearestShip.id,
+                position: nearestShip.position,
+                distance: shipCollisions[0].distance,
+                otherOptions: shipCollisions.length - 1
+            });
+            return nearestShip;
+        }
+
+        return null;
     }
 
     findNearbySensor() {

@@ -117,14 +117,14 @@ export class CollisionSystem {
         if (collision && (bodyA.isSensor || bodyB.isSensor)) {
             collision.lastActiveTime = Date.now();
             
-            console.log('[Collision] Sensor active:', {
-                key,
-                duration: Date.now() - collision.startTime,
-                bodyA: bodyA.label,
-                bodyB: bodyB.label,
-                categoryA: bodyA.collisionFilter?.category?.toString(16),
-                categoryB: bodyB.collisionFilter?.category?.toString(16)
-            });
+            // console.log('[Collision] Sensor active:', {
+            //     key,
+            //     duration: Date.now() - collision.startTime,
+            //     bodyA: bodyA.label,
+            //     bodyB: bodyB.label,
+            //     categoryA: bodyA.collisionFilter?.category?.toString(16),
+            //     categoryB: bodyB.collisionFilter?.category?.toString(16)
+            // });
         }
     }
 
@@ -145,37 +145,38 @@ export class CollisionSystem {
         const key = this.getCollisionKey(bodyA, bodyB);
         const shipId = this.getShipIdFromBody(bodyA) || this.getShipIdFromBody(bodyB);
         
+        // Log collision end details
         console.log('[Collision] Sensor contact lost:', {
             key,
             bodyA: bodyA.label,
             bodyB: bodyB.label,
             shipId,
             currentPlayer: this.currentPlayerId,
-            isPlayerA: bodyA.label.includes(`player_${this.currentPlayerId}`),
-            isPlayerB: bodyB.label.includes(`player_${this.currentPlayerId}`)
+            activeCollisionsCount: this.activeCollisions.size,
+            wasActive: this.activeCollisions.has(key)
         });
 
-        // Only process player collisions if it involves current player
+        // Remove from active collisions first
+        this.activeCollisions.delete(key);
+        this.collisions.delete(key);
+
+        // Remove from recent collisions
+        this.removeRecentCollision(bodyA.id, bodyB);
+        this.removeRecentCollision(bodyB.id, bodyA);
+
+        // Process player collision after cleanup
         if ((bodyA.label.includes(`player_${this.currentPlayerId}`) || 
              bodyB.label.includes(`player_${this.currentPlayerId}`)) && shipId) {
-            
             console.log('[Collision] Current player lost ship contact:', {
                 playerId: this.currentPlayerId,
                 shipId,
-                collisionKey: key
+                remainingCollisions: this.getCollisionsForBody(this.currentPlayer?.physicsBody)
             });
-            
-            // Pass the full ship ID to player
             this.currentPlayer?.unboardShip(shipId);
         }
-        
-        this.collisions.delete(key);
-        this.activeCollisions.delete(key);
-        this.notifyCollisionEnd(bodyA, bodyB);
 
-        // Remove from recent collisions if it matches
-        this.removeRecentCollision(bodyA.id, bodyB);
-        this.removeRecentCollision(bodyB.id, bodyA);
+        // Notify listeners last
+        this.notifyCollisionEnd(bodyA, bodyB);
     }
 
     removeRecentCollision(bodyId, otherBody) {
@@ -267,23 +268,9 @@ export class CollisionSystem {
     }
 
     getCollisionsForBody(targetBody) {
-        if (!targetBody) {
-            console.warn('[Collision] Cannot get collisions for null body');
-            return [];
-        }
+        if (!targetBody) return [];
 
-        // First check recent direct collisions
-        const recentCollision = this.recentCollisions.get(targetBody.id);
-        if (recentCollision) {
-            console.log('[Collision] Found recent collision:', {
-                bodyId: targetBody.id,
-                otherBody: recentCollision.otherBody.label,
-                age: Date.now() - recentCollision.timestamp
-            });
-            return [recentCollision.otherBody];
-        }
-
-        // Fallback to active collisions
+        // Only return collisions that are still active
         const activeCollisions = [];
         for (const collision of this.activeCollisions.values()) {
             if (collision.bodyA.id === targetBody.id) {
@@ -300,7 +287,7 @@ export class CollisionSystem {
             collisions: activeCollisions.map(b => ({
                 id: b.id,
                 label: b.label,
-                category: b.collisionFilter?.category
+                category: b.collisionFilter?.category?.toString(16)
             }))
         });
 

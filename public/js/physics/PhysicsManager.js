@@ -18,12 +18,12 @@ export class PhysicsManager {
         Events.on(this.engine, 'collisionStart', (event) => {
             event.pairs.forEach(pair => {
                 // Handle all collision types for initial contact
-                console.log('[Physics] Collision Start:', {
-                    bodyA: pair.bodyA.label,
-                    bodyB: pair.bodyB.label,
-                    categoryA: pair.bodyA.collisionFilter?.category?.toString(16),
-                    categoryB: pair.bodyB.collisionFilter?.category?.toString(16)
-                });
+                // console.log('[Physics] Collision Start:', {
+                //     bodyA: pair.bodyA.label,
+                //     bodyB: pair.bodyB.label,
+                //     categoryA: pair.bodyA.collisionFilter?.category?.toString(16),
+                //     categoryB: pair.bodyB.collisionFilter?.category?.toString(16)
+                // });
                 this.collisionSystem.handleCollisionStart(pair.bodyA, pair.bodyB);
             });
         });
