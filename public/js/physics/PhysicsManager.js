@@ -1,4 +1,4 @@
-import { Engine, World, Bodies, Body, Events, Runner } from 'matter-js';
+import { Engine, World, Bodies, Body, Events, Runner, Constraint } from 'matter-js';
 import { CollisionSystem } from './CollisionSystem.js';
 
 export class PhysicsManager {
@@ -13,6 +13,14 @@ export class PhysicsManager {
         this.collisionSystem = new CollisionSystem();
         this.fixedTimeStep = 1000/60;
         this.accumulator = 0;
+        this.constraints = new Map();
+
+        // Add friction air to ship bodies
+        this.shipPhysicsConfig = {
+            frictionAir: 0.1,       // Increased air friction
+            angularDamping: 0.9,    // High angular damping to prevent spinning
+            torque: 0,              // No initial torque
+        };
 
         // Set up all collision events
         Events.on(this.engine, 'collisionStart', (event) => {
@@ -58,7 +66,7 @@ export class PhysicsManager {
                bodyB.collisionFilter?.category === this.collisionSystem.categories.SHIP_DETECT;
     }
 
-    addBody(id, body, options = {}) {
+    addBody(id, body, type = 'default') {
         // Ensure collision filter is properly set
         if (!body.collisionFilter) {
             body.collisionFilter = {
@@ -86,6 +94,14 @@ export class PhysicsManager {
             body.collisionFilter.group = 0;
         }
 
+        // Apply ship-specific physics properties
+        if (body.label?.includes('ship_hull')) {
+            Body.set(body, {
+                frictionAir: this.shipPhysicsConfig.frictionAir,
+                angularDamping: this.shipPhysicsConfig.angularDamping,
+            });
+        }
+
         World.add(this.world, body);
         this.bodies.set(id, body);
         this.collisionSystem.addBody(id, body);
@@ -94,6 +110,19 @@ export class PhysicsManager {
             id, label: body.label,
             category: body.collisionFilter?.category
         });
+    }
+
+    addConstraint(id, constraint) {
+        World.add(this.world, constraint);
+        this.constraints.set(id, constraint);
+    }
+
+    removeConstraint(id) {
+        const constraint = this.constraints.get(id);
+        if (constraint) {
+            World.remove(this.world, constraint);
+            this.constraints.delete(id);
+        }
     }
 
     getBodiesState() {
@@ -131,23 +160,27 @@ export class PhysicsManager {
     }
 
     applyForce(body, force) {
-        if (!body) {
-            console.warn('[Physics] Cannot apply force: body is null');
-            return;
-        }
-
+        if (!body) return;
+        
         Body.applyForce(body, 
-            body.position,  // Apply force at body's center
+            body.position,
             {
                 x: force.x,
                 y: force.y
             }
         );
+    }
 
-        // Debug force application
-        if (Math.floor(this.engine.timing.timestamp / 1000) % 1 === 0) {
-    
-        }
+    constrainBodies(bodyA, bodyB) {
+        const constraint = Constraint.create({
+            bodyA: bodyA,
+            bodyB: bodyB,
+            stiffness: 1,
+            length: 0
+        });
+        
+        World.add(this.world, constraint);
+        return constraint;
     }
 
     isBodyOnShip(body, shipBody) {
@@ -193,6 +226,13 @@ export class PhysicsManager {
                point.x <= bounds.max.x && 
                point.y >= bounds.min.y && 
                point.y <= bounds.max.y;
+    }
+
+    cleanup() {
+        // ...existing cleanup code...
+        this.constraints.forEach((constraint, id) => {
+            this.removeConstraint(id);
+        });
     }
 
     // ...rest of existing methods...

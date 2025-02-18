@@ -8,7 +8,10 @@ export class CollisionSystem {
             SHIP_HULL: 0x0004,
             PLAYER_JUMPED: 0x0008,
             BOARDED_PLAYER: 0x0010,
-            SHIP_DETECT: 0x0020
+            SHIP_DETECT: 0x0020,
+            SHIP_MODULE: 0x0040,
+            SHIP_MODULE_NON_INTERACT: 0x0080,
+            PROJECTILES: 0x0100
         };
 
         // Add collision groups
@@ -17,13 +20,14 @@ export class CollisionSystem {
             PLAYERS: 1,           // Players collide with each other
             BOARDED_PLAYERS: 2,           // Mounted players collide with each other
             SHIPS: 3,            // Ships collide with each other
-            BOUNDARIES: -1        // Boundaries never collide with each other
+            BOUNDARIES: -1,        // Boundaries never collide with each other
+            SHIP_MODULES: -2,      // Ship modules never collide with each other
         };
 
         this.masks = {
             PLAYER: {
                 category: this.categories.PLAYER,
-                mask: this.categories.SHIP_HULL ,
+                mask: this.categories.SHIP_HULL | this.categories.SHIP_MODULE, // Add SHIP_MODULE
                 group: this.groups.PLAYERS  // Group 1 - collides with each other
             },
             PLAYER_JUMPED: {
@@ -38,7 +42,7 @@ export class CollisionSystem {
             },
             BOARDED_PLAYER: {
                 category: this.categories.BOARDED_PLAYER,
-                mask: this.categories.SHIP_DETECT,  // Must detect ship sensors
+                mask: this.categories.SHIP_DETECT | this.categories.SHIP_MODULE,  // Must detect ship sensors
                 group: this.groups.BOARDED_PLAYERS  // Mounted players don't collide
             },
             SHIP_DETECT: {
@@ -49,6 +53,16 @@ export class CollisionSystem {
             SHIP_SENSOR: {
                 category: this.categories.SHIP_DETECT,
                 mask: this.categories.BOARDED_PLAYER | this.categories.PLAYER_JUMPED,  // Must detect boarded players
+                group: this.groups.NONE
+            },
+            SHIP_MODULE: {
+                category: this.categories.SHIP_MODULE,
+                mask: this.categories.PLAYER | this.categories.BOARDED_PLAYER | this.categories.PROJECTILES,  // Add BOARDED_PLAYER
+                group: this.groups.SHIP_MODULES
+            },
+            SHIP_MODULE_NON_INTERACT: {
+                category: this.categories.SHIP_MODULE_NON_INTERACT,
+                mask: 0, // Doesn't collide with anything
                 group: this.groups.NONE
             }
         };

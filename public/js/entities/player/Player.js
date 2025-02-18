@@ -11,21 +11,21 @@ export class Player {
         
         // Adjust physics properties for better movement
         this.physics = {
-            radius: 20,
+            radius: 10,  // Halved from 20
             friction: 0.01,
             frictionAir: 0.1,     // Reduced air friction
-            mass: 80,              // Reduced mass
-            density: 0.001,
+            mass: 0.001,              // Reduced mass
+            density: 0.0001,
             restitution: 0.2,
-            maxForce: 0.025,       // Increased force
-            maxSpeed: 5,           // Increased speed
-            acceleration: 0.1,
-            deceleration: 0.98,
+            maxForce: 0.000025,       // Increased force
+            maxSpeed: 4,           // Increased speed
+            acceleration: 0.01,
+            deceleration: 0.098,
             turnSpeed: 0.05,
             movement: {
-                forward: 1.0,
-                backward: 0.5,
-                strafe: 0.7
+                forward: 0.01,
+                backward: 0.005,
+                strafe: 0.007
             }
         };
 
@@ -435,7 +435,6 @@ export class Player {
         // Set up timers
         this.jumpTimer = setTimeout(() => this.handleJumpEnd(), this.state.jumpDuration);
         this.jumpCheckPoints = [
-            setTimeout(() => this.checkForShipLanding(), this.state.jumpDuration * 0.5),
             setTimeout(() => this.checkForShipLanding(), this.state.jumpDuration * 0.75)
         ];
     }

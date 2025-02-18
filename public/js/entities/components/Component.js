@@ -1,3 +1,5 @@
+import { Bodies, Constraint, Body } from 'matter-js';
+
 export class ShipComponent {
     constructor(x, y, r, id, quality) {
         this.position = { x, y };
@@ -13,6 +15,18 @@ export class ShipComponent {
         // Add world position tracking
         this.worldPosition = { x: 0, y: 0 };
         this.worldRotation = 0;
+
+        // Add physics properties
+        this.physicsBody = null;
+        this.physicsShape = {
+            type: 'rectangle',  // default shape type
+            width: 30,
+            height: 30
+        };
+
+        // Store original local position
+        this.localPosition = { x, y };
+        this.bindPosition = { x, y };
     }
 
     // Add base bindToShip method that all components will inherit
@@ -26,22 +40,80 @@ export class ShipComponent {
         }
     }
 
+    createPhysicsBody(physicsManager, parentBody, initialAngle) {
+        if (!physicsManager || !this.ship || !parentBody) return;
+
+        const angle = initialAngle || parentBody.angle;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        
+        const worldPos = {
+            x: parentBody.position.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+            y: parentBody.position.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
+        };
+
+        const bodyOptions = {
+            isStatic: true,  // Make static since we'll manually update position
+            angle: angle,
+            label: `module_${this.constructor.name}_${this.id}`,
+            collisionFilter: physicsManager.collisionSystem.getCollisionFilter(
+                this instanceof Sail ? 'SHIP_MODULE_NON_INTERACT' : 'SHIP_MODULE'
+            ),
+            plugin: { component: this }
+        };
+
+        this.physicsBody = this.physicsShape.type === 'circle' 
+            ? Bodies.circle(worldPos.x, worldPos.y, this.physicsShape.radius, bodyOptions)
+            : Bodies.rectangle(worldPos.x, worldPos.y, this.physicsShape.width, this.physicsShape.height, bodyOptions);
+
+        physicsManager.addBody(this.id, this.physicsBody);
+    }
+
+    renderPhysicsBody(ctx) {
+        if (!this.physicsBody?.vertices) {
+            console.warn(`[Component ${this.id}] No physics body to render`);
+            return;
+        }
+
+        ctx.save();
+        ctx.strokeStyle = '#00FF00';  // Green for module bodies
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+        ctx.lineWidth = 1;
+
+        ctx.beginPath();
+        const vertices = this.physicsBody.vertices;
+        ctx.moveTo(vertices[0].x, vertices[0].y);
+        for (let i = 1; i < vertices.length; i++) {
+            ctx.lineTo(vertices[i].x, vertices[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fill();
+
+        ctx.restore();
+    }
+
     update(deltaTime) {
-        // Update world position based on ship and relative position
-        if (this.ship) {
-            const shipPos = this.ship.position;
-            const shipRot = this.ship.rotation;
-            
-            // Calculate world position using ship's center as origin
+        if (this.ship && this.physicsBody) {
+            // Get ship's current transform
+            const shipPos = this.ship.physicsBody?.position || this.ship.position;
+            const shipRot = this.ship.physicsBody?.angle || this.ship.rotation;
+
+            // Calculate new world position
             const cos = Math.cos(shipRot);
             const sin = Math.sin(shipRot);
             
-            this.worldPosition = {
-                x: shipPos.x + (cos * this.position.x - sin * this.position.y),
-                y: shipPos.y + (sin * this.position.x + cos * this.position.y)
+            const newPos = {
+                x: shipPos.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+                y: shipPos.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
             };
-            
-            this.worldRotation = shipRot + this.rotation;
+
+            // Update physics body position and rotation
+            Body.setPosition(this.physicsBody, newPos);
+            Body.setAngle(this.physicsBody, shipRot);
+
+            this.worldPosition = newPos;
+            this.worldRotation = shipRot;
         }
 
         // Smooth rotation interpolation
@@ -74,15 +146,56 @@ export class ShipComponent {
     }
 
     render(ctx) {
-        // No need to translate - ship handles positioning
         ctx.save();
+        // No translation needed - parent ship handles it
+        ctx.rotate(this.rotation);
         this.renderComponent(ctx);
+        ctx.restore();
+    }
+
+    renderPhysicsDebug(ctx) {
+        if (!this.physicsBody?.vertices) return;
+
+        // Draw module physics shape
+        ctx.save();
+        ctx.strokeStyle = '#00FF00';
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+
+        // Draw world position
+        ctx.beginPath();
+        this.physicsBody.vertices.forEach((v, i) => {
+            if (i === 0) ctx.moveTo(v.x , v.y);
+            else ctx.lineTo(v.x, v.y);
+        });
+        ctx.stroke();
+        ctx.fill();
+
+        // Draw local space indicator
+        ctx.beginPath();
+        ctx.arc(this.position.x +this.worldPosition.x, this.position.y+this.worldPosition.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFF00';
+        ctx.fill();
+
+        // Draw coordinate info
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(`World: (${this.physicsBody.position.x.toFixed(0)}, ${this.physicsBody.position.y.toFixed(0)})`, 
+                    this.physicsBody.position.x + 10, this.physicsBody.position.y);
+        ctx.fillText(`Local: (${this.position.x.toFixed(0)}, ${this.position.y.toFixed(0)})`, 
+                    this.position.x + 10 +this.worldPosition.x, this.position.y+this.worldPosition.y);
+
         ctx.restore();
     }
 
     renderComponent(ctx) {
         // Base class doesn't render anything
         console.warn(`[Component ${this.id}] No render implementation`);
+    }
+
+    cleanup() {
+        if (this.physicsManager && this.physicsBody) {
+            this.physicsManager.removeBody(this.id);
+            this.physicsBody = null;
+        }
     }
 }
 
@@ -109,6 +222,13 @@ export class Cannon extends ShipComponent {
         this.range = 500;
         this.projectileSpeed = 10;
         this.spread = 0.1; // Radians
+
+        // Custom physics shape for cannon
+        this.physicsShape = {
+            type: 'rectangle',
+            width: 30,
+            height: 60
+        };
     }
 
     update(deltaTime) {
@@ -194,6 +314,13 @@ export class SteeringWheel extends ShipComponent {
         this.position = { x: -50, y: 0 }; // Fixed position relative to ship
         this.rotation = 0; // Fixed rotation
         this.bindPosition = { x: -50, y: 0 }; // Match position for binding
+
+        // Custom physics shape for steering wheel
+        this.physicsShape = {
+            type: 'rectangle',
+            width: 20,   // Width of steering wheel collision
+            height: 40   // Height of steering wheel collision
+        };
     }
 
     update(deltaTime) {
@@ -235,20 +362,97 @@ export class Sail extends ShipComponent {
         this.openness = 0; // 0 to 1
         this.windResistance = 0.8;
         this.maxSpeed = 5 * this.efficiency;
+
+        // Separate physics shapes for mast and fibers
+        this.physicsShapes = {
+            mast: {
+                type: 'circle',
+                radius: 15,  // Match the mast visual radius
+                collisionMask: 'SHIP_MODULE'  // Mast can be collided with
+            },
+            fiber: {
+                type: 'rectangle',
+                width: 40,
+                height: 260,
+                collisionMask: 'SHIP_MODULE_NON_INTERACT'  // Fibers are non-interactive
+            }
+        };
+    }
+
+    createPhysicsBody(physicsManager, parentBody) {
+        // Similar to base class but for both mast and fiber
+        if (!physicsManager || !this.ship || !parentBody) return;
+
+        const angle = parentBody.angle;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const worldPos = {
+            x: parentBody.position.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+            y: parentBody.position.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
+        };
+
+        const mastId = `${this.id}_mast`;
+        const fiberId = `${this.id}_fiber`;
+
+        // Create static bodies that we'll manually update
+        this.physicsBody = Bodies.circle(
+            worldPos.x,
+            worldPos.y,
+            this.physicsShapes.mast.radius,
+            {
+                isStatic: true,
+                angle: angle,
+                label: `module_mast_${this.id}`,
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.mast.collisionMask)
+            }
+        );
+
+        this.fiberBody = Bodies.rectangle(
+            worldPos.x,
+            worldPos.y,
+            this.physicsShapes.fiber.width,
+            this.physicsShapes.fiber.height,
+            {
+                isStatic: true,
+                isSensor: true,
+                angle: angle,
+                label: `module_fiber_${this.id}`,
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.fiber.collisionMask)
+            }
+        );
+
+        physicsManager.addBody(mastId, this.physicsBody);
+        physicsManager.addBody(fiberId, this.fiberBody);
+
+        this.bodyIds = { mast: mastId, fiber: fiberId };
     }
 
     update(deltaTime) {
-        super.update(deltaTime);
-        if (this.ship) {
-            // Calculate wind effect
-            const windForce = this.openness * this.efficiency * this.windResistance;
-            // Apply force to ship in sail's direction
-            if (windForce > 0) {
-                const forceX = Math.cos(this.rotation) * windForce;
-                const forceY = Math.sin(this.rotation) * windForce;
-                this.ship.applyForce(forceX, forceY);
-            }
+        if (!this.ship) return;
+
+        const shipPos = this.ship.physicsBody?.position || this.ship.position;
+        const shipRot = this.ship.physicsBody?.angle || this.ship.rotation;
+
+        const cos = Math.cos(shipRot);
+        const sin = Math.sin(shipRot);
+        
+        const newPos = {
+            x: shipPos.x + (cos * this.bindPosition.x - sin * this.bindPosition.y),
+            y: shipPos.y + (sin * this.bindPosition.x + cos * this.bindPosition.y)
+        };
+
+        // Update both bodies
+        if (this.physicsBody) {
+            Body.setPosition(this.physicsBody, newPos);
+            Body.setAngle(this.physicsBody, shipRot);
         }
+        if (this.fiberBody) {
+            Body.setPosition(this.fiberBody, newPos);
+            Body.setAngle(this.fiberBody, shipRot);
+        }
+
+        this.worldPosition = newPos;
+        this.worldRotation = shipRot;
     }
 
     setOpenness(amount) {
@@ -288,6 +492,134 @@ export class Sail extends ShipComponent {
     // Replace original render with new layered approach
     renderComponent(ctx) {
         // Render nothing here - rendering is now handled by specific methods
+    }
+
+    renderPhysicsDebug(ctx) {
+   
+
+        ctx.save();
+        
+        // Draw mast physics shape (solid)
+        ctx.strokeStyle = '#00FF00';  // Green for solid mast
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+
+        // Draw mast body vertices
+        ctx.beginPath();
+        this.physicsBody.vertices.forEach((v, i) => {
+            if (i === 0) ctx.moveTo(v.x , v.y);
+            else ctx.lineTo(v.x, v.y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fill();
+
+        // Draw fiber sensor shape (dashed)
+        if (this.fiberBody?.vertices) {
+            ctx.strokeStyle = '#FF00FF';  // Pink for fiber sensor
+            ctx.fillStyle = 'rgba(255, 0, 255, 0.05)';
+            ctx.setLineDash([5, 5]);
+
+            ctx.beginPath();
+            this.fiberBody.vertices.forEach((v, i) => {
+                if (i === 0) ctx.moveTo(v.x, v.y);
+                else ctx.lineTo(v.x, v.y);
+            });
+            ctx.closePath();
+            ctx.stroke();
+            ctx.fill();
+        }
+
+        // Draw coordinate info
+        ctx.fillStyle = '#FFFFFF';
+        ctx.setLineDash([]);
+        ctx.fillText(
+            `World: (${this.physicsBody.position.x.toFixed(0)}, ${this.physicsBody.position.y.toFixed(0)})`,
+            this.physicsBody.position.x  + 10,
+            this.physicsBody.position.y 
+        );
+        ctx.fillText(
+            `Local: (${this.position.x.toFixed(0)}, ${this.position.y.toFixed(0)})`,
+            this.position.x + 10 +this.worldPosition.x,
+            this.position.y +this.worldPosition.y
+        );
+
+        ctx.restore();
+    }
+
+    cleanup() {
+        if (this.physicsManager) {
+            // Clean up both bodies and constraints using stored IDs
+            const { mast, fiber } = this.bodyIds || {};
+            if (mast) {
+                this.physicsManager.removeConstraint(`${mast}_constraint`);
+                // Remove stabilizer constraints
+                this.stabilizers?.forEach((_, index) => {
+                    this.physicsManager.removeConstraint(`${mast}_stabilizer_${index}`);
+                });
+                this.physicsManager.removeBody(mast);
+            }
+            if (fiber) {
+                this.physicsManager.removeConstraint(`${fiber}_constraint`);
+                this.physicsManager.removeBody(fiber);
+            }
+        }
+    }
+
+    renderPhysicsBody(ctx) {
+        if (!this.physicsBody || !this.ship?.position) return;
+
+        ctx.save();
+        // Calculate positions relative to ship's world position
+        const shipPos = this.ship.physicsBody ? this.ship.physicsBody.position : this.ship.position;
+        const mastPos = this.physicsBody.position;
+
+        // Draw mast body (circle)
+        ctx.strokeStyle = '#00FF00';
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+        ctx.lineWidth = 1;
+
+        ctx.beginPath();
+        ctx.arc(
+            mastPos.x - shipPos.x,
+            mastPos.y - shipPos.y,
+            this.physicsShapes.mast.radius,
+            0,
+            Math.PI * 2
+        );
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    renderFiberPhysicsBody(ctx) {
+        if (!this.fiberBody || !this.ship?.position) return;
+
+        ctx.save();
+        // Calculate positions relative to ship's world position
+        const shipPos = this.ship.physicsBody ? this.ship.physicsBody.position : this.ship.position;
+        const shipRot = this.ship.physicsBody ? this.ship.physicsBody.angle : this.ship.rotation;
+        const fiberPos = this.fiberBody.position;
+
+        // Transform to local space
+        ctx.translate(fiberPos.x - shipPos.x, fiberPos.y - shipPos.y);
+        ctx.rotate(this.fiberBody.angle - shipRot);
+
+        // Draw fiber body (rectangle)
+        ctx.strokeStyle = '#FF00FF';
+        ctx.fillStyle = 'rgba(255, 0, 255, 0.1)';
+        ctx.setLineDash([5, 5]);
+        
+        ctx.strokeRect(
+            -this.physicsShapes.fiber.width/2,
+            -this.physicsShapes.fiber.height/2,
+            this.physicsShapes.fiber.width,
+            this.physicsShapes.fiber.height
+        );
+
+        ctx.restore();
     }
 }
 

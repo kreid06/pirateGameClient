@@ -8,6 +8,16 @@ export class Ship {
         this.id = id;
         this.modules = new Map();
         this.path = null;
+
+        // Add physics properties
+        this.physics = {
+            mass: 1000,              // Base mass
+            friction: 0.01,          // Low friction for smooth movement
+            frictionAir: 0.001,      // Very low air resistance
+            restitution: 0.1,        // Low bounce (10%)
+            density: 0.001,          // Low density for better floating
+            angularDamping: 0.05     // Rotation resistance
+        };
     }
     
     // ...existing ship methods...
@@ -43,14 +53,15 @@ export class Ship {
 
 
     applyForce(forceX, forceY) {
-        if (!this.physics) return;
+        if (!this.physicsBody || !this.physicsManager) return;
         
-        // Convert component force to world space
-        const worldForceX = forceX * Math.cos(this.rotation) - forceY * Math.sin(this.rotation);
-        const worldForceY = forceX * Math.sin(this.rotation) + forceY * Math.cos(this.rotation);
+        // Convert force to world space
+        const worldForce = {
+            x: forceX * Math.cos(this.rotation) - forceY * Math.sin(this.rotation),
+            y: forceX * Math.sin(this.rotation) + forceY * Math.cos(this.rotation)
+        };
         
-        // Apply force to ship's physics body
-        this.physics.applyForce({ x: worldForceX, y: worldForceY });
+        this.physicsManager.applyForce(this.physicsBody, worldForce);
     }
 
     update(deltaTime) {
@@ -65,24 +76,29 @@ export class Ship {
     render(ctx) {
         ctx.save();
         
-        // Draw ship at physics body position if available
-        const renderPos = this.physicsBody ? this.physicsBody.position : this.position;
-        const renderRot = this.physicsBody ? this.physicsBody.angle : this.rotation;
+        // 1. Transform to ship's position
+        const pos = this.physicsBody ? this.physicsBody.position : this.position;
+        const rot = this.physicsBody ? this.physicsBody.angle : this.rotation;
         
-        // Remove the -25px offset and center everything properly
-        ctx.translate(renderPos.x, renderPos.y);
-        ctx.rotate(renderRot);
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(rot);
         
+        // 2. Draw ship hull in local space
         this.drawHull(ctx);
+        
+        // 3. Draw modules in local space
         this.renderModules(ctx);
+        
+        // 4. Debug draw physics if enabled
+        if (this.physicsManager?.debugDraw) {
+            this.renderPhysicsDebug(ctx);
+        }
         
         ctx.restore();
     }
 
     renderModules(ctx) {
-        // First save the ship's transform context
-        ctx.save();
-        
+        // Important: Ship's transform is already applied at this point
         const renderLayers = [
             { type: SteeringWheel, name: 'steering' },
             { type: Cannon, name: 'cannons' },
@@ -93,10 +109,10 @@ export class Ship {
         renderLayers.forEach(layer => {
             this.modules.forEach(module => {
                 if (module instanceof layer.type) {
-                    // Save context for each module
                     ctx.save();
-                    // Move to module's position relative to ship center
-                    ctx.translate(module.position.x, module.position.y);
+                    // Translate to module's bind position
+                    ctx.translate(module.bindPosition.x, module.bindPosition.y);
+                    // Don't rotate here - module handles its own rotation relative to ship
                     
                     if (layer.renderMethod) {
                         module[layer.renderMethod]?.(ctx);
@@ -108,8 +124,6 @@ export class Ship {
                 }
             });
         });
-
-        ctx.restore();
     }
 
     drawHull(ctx) {
@@ -133,29 +147,27 @@ export class Ship {
     createPhysicsBody(physicsManager) {
         if (!physicsManager) return;
 
-        // Create hull vertices
+        // Create hull vertices (same as before)
         const hullVertices = Vertices.fromPath([
-            "225 90",    // Bow top
-            "360 25",    // Bow curve top
-            "360 -25",   // Bow curve bottom
-            "225 -90",   // Bow bottom
-            "-225 -90",  // Stern bottom
-            "-275 0",    // Stern curve
-            "-225 90"    // Stern top
+            "225 90", "360 25", "360 -25", "225 -90",
+            "-225 -90", "-275 0", "-225 90"
         ].join(' '));
 
-        // Create main physical hull with consistent ID format
+        // Update physics properties for dynamic body
         this.physicsBody = Bodies.fromVertices(
             this.position.x, 
             this.position.y, 
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_hull_${this.id}`,  // Consistent format: ship_hull_[id]
-                isStatic: true,
-                isSensor: false,
-                friction: 0.1,
-                restitution: 0.2,
+                label: `ship_hull_${this.id}`,
+                isStatic: false,  // Make dynamic
+                mass: this.physics.mass,
+                friction: this.physics.friction,
+                frictionAir: this.physics.frictionAir,
+                restitution: this.physics.restitution,   // Add explicit restitution
+                density: this.physics.density,           // Add explicit density
+                angularDamping: this.physics.angularDamping,
                 collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_HULL'),
                 plugin: {
                     ship: this,
@@ -164,16 +176,16 @@ export class Ship {
             }
         );
 
-        // Create sensor with matching ID format
+        // Make sensor follow main body
         this.sensorHull = Bodies.fromVertices(
             this.position.x, 
             this.position.y, 
             [hullVertices],
             {
                 angle: this.rotation,
-                label: `ship_sensor_${this.id}`,  // Consistent format: ship_sensor_[id]
-                isStatic: true,
-                isSensor: true,  // This one is always a sensor
+                label: `ship_sensor_${this.id}`,
+                isStatic: false,  // Make dynamic
+                isSensor: true,
                 collisionFilter: physicsManager.collisionSystem.getCollisionFilter('SHIP_SENSOR'),
                 plugin: {
                     ship: this,
@@ -182,63 +194,22 @@ export class Ship {
             }
         );
 
-        // Add both bodies to physics world
+        // Add bodies to world
         physicsManager.addBody(`${this.id}_hull`, this.physicsBody);
         physicsManager.addBody(`${this.id}_sensor`, this.sensorHull);
 
-        // Rotate both bodies
-        Body.setAngle(this.physicsBody, this.rotation);
-        Body.setAngle(this.sensorHull, this.rotation);
+        // Create constraint to make sensor follow hull
+        physicsManager.constrainBodies(this.physicsBody, this.sensorHull);
 
-        // Log ship hull creation
-        console.log('[Ship] Created hull:', {
-            id: this.id,
-            isSensor: this.physicsBody.isSensor,
-            category: this.physicsBody.collisionFilter.category,
-            mask: this.physicsBody.collisionFilter.mask
+        // Store physics manager reference for force application
+        this.physicsManager = physicsManager;
+
+        // Create physics bodies for all modules with proper initial angle
+        const initialShipAngle = this.physicsBody.angle;
+        this.modules.forEach(module => {
+            // Pass the initial angle to createPhysicsBody
+            module.createPhysicsBody(physicsManager, this.physicsBody, initialShipAngle);
         });
-
-        // Remove jump detector code and just use the main hull
-        physicsManager.addBody(`${this.id}_hull`, this.physicsBody);
-
-
-        // Rotate all bodies to match ship rotation
-        Body.setAngle(this.physicsBody, this.rotation);
-
-        // Add bodies to physics world with collision callbacks
-        physicsManager.addBody(`${this.id}_hull`, this.physicsBody, {
-            onCollide: (pair) => this.handleCollision(pair)
-        });
-     
-        // Create boarding boundary (hollow square)
-        // const boundaryWidth = 400;
-        // const boundaryHeight = 300;
-        // const wallThickness = 10;
-
-        // // Create four walls for the boundary
-        // const walls = [
-        //     // Top wall
-        //     Bodies.rectangle(0, -boundaryHeight/2, boundaryWidth, wallThickness),
-        //     // Bottom wall
-        //     Bodies.rectangle(0, boundaryHeight/2, boundaryWidth, wallThickness),
-        //     // Left wall
-        //     Bodies.rectangle(-boundaryWidth/2, 0, wallThickness, boundaryHeight),
-        //     // Right wall
-        //     Bodies.rectangle(boundaryWidth/2, 0, wallThickness, boundaryHeight)
-        // ];
-
-        // // Create compound body for boundary
-        // this.boardingBoundary = Body.create({
-        //     parts: walls,
-        //     position: this.position,
-        //     angle: this.rotation,
-        //     isStatic: true,
-        //     label: `boarding_boundary_${this.id}`,
-        //     collisionFilter: physicsManager.collisionSystem.getCollisionFilter('BOARDED_BOUNDARY')
-        // });
-
-        // // Add bodies to physics world
-        // physicsManager.addBody(`${this.id}_boundary`, this.boardingBoundary);
     }
 
     handleCollision(pair) {
@@ -306,69 +277,16 @@ export class Ship {
         ctx.closePath();
         ctx.stroke();
 
-        // Draw mount sensor if exists
-        if (this.mountSensor?.vertices) {
-            ctx.strokeStyle = '#FFFF00';  // Yellow for mount area
-            ctx.fillStyle = 'rgba(255, 255, 0, 0.1)';
-            ctx.setLineDash([5, 5]);
-
-            ctx.beginPath();
-            const sensorVertices = this.mountSensor.vertices;
-            ctx.moveTo(sensorVertices[0].x, sensorVertices[0].y);
-            for (let i = 1; i < sensorVertices.length; i++) {
-                ctx.lineTo(sensorVertices[i].x, sensorVertices[i].y);
-            }
-            ctx.closePath();
-            ctx.stroke();
-            ctx.fill();
-        }
-
-        // Render boarding boundary if it exists
-        if (this.boardingBoundary?.parts) {
-            ctx.strokeStyle = '#0000FF';  // Blue for boarding boundary
-            ctx.fillStyle = 'rgba(0, 0, 255, 0.1)';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-
-            this.boardingBoundary.parts.forEach(part => {
-                if (!part.vertices) return;
-                
-                ctx.beginPath();
-                const vertices = part.vertices;
-                ctx.moveTo(vertices[0].x, vertices[0].y);
-                for (let i = 1; i < vertices.length; i++) {
-                    ctx.lineTo(vertices[i].x, vertices[i].y);
+ 
+            this.modules.forEach(module => {
+                if(module instanceof Sail){
+                    console.log(`sail detected`);
+                    module.renderPhysicsDebug(ctx);
+                }else{
+                    module.renderPhysicsDebug(ctx);
                 }
-                ctx.closePath();
-                ctx.stroke();
             });
-        }
-
-        ctx.restore();
-    }
-
-    renderDeckBoundaries(ctx) {
-        if (!this.deckBoundaries) return;
-
-        ctx.save();
-        ctx.strokeStyle = '#00FF00';  // Green for deck boundaries
-        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([5, 5]);
-
-        this.deckBoundaries.forEach(boundary => {
-            if (!boundary.vertices) return;
-            
-            ctx.beginPath();
-            const vertices = boundary.vertices;
-            ctx.moveTo(vertices[0].x, vertices[0].y);
-            for (let i = 1; i < vertices.length; i++) {
-                ctx.lineTo(vertices[i].x, vertices[i].y);
-            }
-            ctx.closePath();
-            ctx.stroke();
-            ctx.fill();
-        });
+        
 
         ctx.restore();
     }
@@ -419,6 +337,35 @@ export class Ship {
                 this.physicsManager.removeBody(`${this.id}_sensor`);
             }
         }
+        
+        // Cleanup module physics bodies
+        this.modules.forEach(module => {
+            if (module.physicsBody && this.physicsManager) {
+                this.physicsManager.removeBody(module.id);
+            }
+        });
+    }
+
+    renderPhysicsDebug(ctx) {
+        if (!this.physicsBody?.vertices) return;
+
+        this.modules.forEach(module => {
+            if (module instanceof Sail) {
+                ctx.save();
+                // Transform relative to ship for physics debug
+                const shipPos = this.physicsBody ? this.physicsBody.position : this.position;
+                const shipRot = this.physicsBody ? this.physicsBody.angle : this.rotation;
+                
+                // Move to ship position and rotation for correct module rendering
+                ctx.translate(shipPos.x, shipPos.y);
+                ctx.rotate(shipRot);
+                
+                module.renderPhysicsDebug(ctx);
+                ctx.restore();
+            } else {
+                module.renderPhysicsDebug(ctx);
+            }
+        });
     }
 }
 

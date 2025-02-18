@@ -6,9 +6,9 @@ export const RENDER_LAYERS = {
     GRID: 1,
     ISLANDS: 2,
     SHIPS: 3,
-    SHIP_MODULES: 4,
-    PLAYERS: 5,      // Player layer is now after ships but before UI
-    OTHER_PLAYERS: 6,
+    PLAYERS: 4,      // Player layer is now after ships but before UI
+    OTHER_PLAYERS: 5,
+    SHIP_MODULES: 6,
     UI: 7
 };
 
