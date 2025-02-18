@@ -3,11 +3,21 @@
 <head>
     <title>Pirate Game</title>
     <style>
+        /* Update canvas styles */
         canvas { 
-            border: 1px solid black;
+            border: none;
             background: #87CEEB;
+            display: block;  /* Remove any extra space */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
         }
-        body { margin: 0; }
+        body { 
+            margin: 0; 
+            overflow: hidden;  /* Prevent scrollbars */
+        }
         #coordinates {
             position: fixed;
             top: 10px;
@@ -126,10 +136,12 @@
 </head>
 <body>
     <div id="loginForm">
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
-        <button onclick="register()">Register</button>
+        <form id="authForm">
+            <input type="text" id="username" placeholder="Username" autocomplete="username" required>
+            <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+            <button id="loginButton" type="submit">Login</button>
+            <button id="registerButton" type="button">Register</button>
+        </form>
     </div>
     <div id="coordinates" class="hidden">X: 0, Y: 0</div>
     <canvas id="gameCanvas" class="hidden"></canvas>
@@ -143,86 +155,8 @@
         <button id="logoutButton">Logout</button>
     </div>
     
-    <!-- Load auth.js first -->
-    <script type="module" src="/js/auth.js"></script>
-    <!-- Then load connection.js which depends on auth.js -->
-    <script type="module" src="/js/connection.js"></script>
-    <!-- Finally load gameClient.js which depends on both -->
-    <script type="module" src="/js/gameClient.js"></script>
-    
-    <!-- Keep the auth initialization script -->
-    <script type="module">
-        import { AuthService } from './js/auth.js';
-        
-        const auth = AuthService.getInstance();
-        window.auth = auth;
-        
-        window.login = async () => {
-            try {
-                const username = document.getElementById('username').value;
-                const password = document.getElementById('password').value;
-                
-                // Show loading state
-                document.getElementById('loginForm').style.opacity = '0.5';
-                await auth.login(username, password);
-                
-                // Start game immediately after successful login
-                startGame();
-            } catch (error) {
-                showError('Login failed: ' + error.message);
-            } finally {
-                document.getElementById('loginForm').style.opacity = '1';
-            }
-        };
-        
-        window.register = async () => {
-            try {
-                const username = document.getElementById('username').value;
-                const password = document.getElementById('password').value;
-                
-                if (!username || !password) {
-                    showError('Username and password are required');
-                    return;
-                }
-
-                // Show loading state
-                document.getElementById('loginForm').style.opacity = '0.5';
-                
-                // Attempt registration
-                const result = await auth.register(username, password);
-                
-                if (result.error) {
-                    showError('Registration failed: ' + result.error);
-                    return;
-                }
-
-                console.log('[Auth] Registration successful, proceeding to game');
-                startGame();
-            } catch (error) {
-                showError('Registration failed: ' + error.message);
-                document.getElementById('loginForm').style.opacity = '1';
-            }
-        };
-        
-        function startGame() {
-            document.getElementById('loginForm').classList.add('hidden');
-            document.getElementById('coordinates').classList.remove('hidden');
-            document.getElementById('gameCanvas').classList.remove('hidden');
-            window.dispatchEvent(new Event('startGame'));
-        }
-
-        function showError(message) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'error-message';
-            errorDiv.textContent = message;
-            document.body.appendChild(errorDiv);
-            setTimeout(() => errorDiv.remove(), 5000);
-        }
-        
-        // Auto-login if token exists
-        if (auth.getToken()) {
-            startGame(); // Start game immediately if token exists
-        }
-    </script>
+   
+    <!-- Replace the auth initialization script with main.js import -->
+    <script type="module" src="./js/main.js"></script>
 </body>
 </html>
