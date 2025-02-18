@@ -518,8 +518,27 @@ export class Player {
 
     findNearbyShip() {
         const collisions = this.physicsManager.collisionSystem.getCollisionsForBody(this.physicsBody);
-        console.log(collisions)
-        return collisions.find(body => body?.label?.startsWith('ship_hull'));
+        
+        // Sort collisions by most recent first if there are timestamps
+        const sortedCollisions = collisions.sort((a, b) => {
+            const timeA = a.lastActiveTime || 0;
+            const timeB = b.lastActiveTime || 0;
+            return timeB - timeA;
+        });
+
+        // Find the most recent ship hull collision
+        const nearbyShip = sortedCollisions.find(body => {
+            const isShip = body?.label?.startsWith('ship_hull');
+            if (isShip) {
+                console.log('[Player] Found nearby ship:', {
+                    shipLabel: body.label,
+                    timestamp: body.lastActiveTime
+                });
+            }
+            return isShip;
+        });
+
+        return nearbyShip;
     }
 
     findNearbySensor() {
@@ -559,36 +578,48 @@ export class Player {
     }
 
     boardShip(shipBody) {
-        const shipId = shipBody.label.split('_').pop(); // Extract ID from label
+        const shipId = this.physicsManager.collisionSystem.getShipIdFromBody(shipBody);
+        if (!shipId) {
+            console.warn('[Player] Could not get ship ID from body:', shipBody.label);
+            return;
+        }
+
         console.log('[Player] Boarding ship:', {
-            shipId: shipId,
+            shipId,
             shipLabel: shipBody.label,
+            previousShipId: this.state.boardedShipId,
             previousCategory: this.state.currentCollisionCategory
         });
 
+        // Reset state before boarding new ship
+        if (this.state.isBoarded) {
+            this.unboardShip(this.state.boardedShipId);
+        }
+
         this.state.isJumping = false;
         this.state.isBoarded = true;
-        this.state.boardedShipId = shipId;  // Store ship ID
+        this.state.boardedShipId = shipId;
         this.state.lastShipDetection = Date.now();
         this.setCollisionCategory('BOARDED_PLAYER');
     }
 
-    unboardShip(key = 'unknown') {
-        if(key.substring(2)==this.state.boardedShipId){
-            console.log('[Player] Unboarding ship:', {
-                key,
-                shipId: this.state.boardedShipId,
-                playerPos: this.position,
-                currentCategory: this.state.currentCollisionCategory,
-                timestamp: Date.now()
-            });
-
+    unboardShip(shipId) {
+        console.log('[Player] Unboarding ship:', {
+            requestedShipId: shipId,
+            currentShipId: this.state.boardedShipId,
+            playerPos: this.position,
+            currentCategory: this.state.currentCollisionCategory,
+            timestamp: Date.now()
+        });
+        
+        // Only unboard if this is our current ship or we're forcing unboard
+        if (shipId === this.state.boardedShipId || shipId === 'force') {
             this.state.isBoarded = false;
             this.state.boardedShipId = null;
             this.state.lastShipDetection = 0;
             this.returnToNormalState();
-        }else{
-            console.log(`[Player] failed to unboard ship: ${key.substring(2)} != ${this.state.boardedShipId}`);
+        } else {
+            console.log(`[Player] Ignoring unboard request: wrong ship (current: ${this.state.boardedShipId}, requested: ${shipId})`);
         }
     }
 }
