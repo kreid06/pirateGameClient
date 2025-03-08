@@ -57,6 +57,43 @@ export class PhysicsManager {
                 }
             });
         });
+
+        // Add debug interval for constraints
+        this.lastConstraintLog = 0;
+        this.constraintLogInterval = 1000; // Log every second
+
+        // Log constraint events
+        Events.on(this.engine, 'afterUpdate', () => {
+            const now = Date.now();
+            if (now - this.lastConstraintLog >= this.constraintLogInterval) {
+                this.logConstraints();
+                this.lastConstraintLog = now;
+            }
+        });
+
+        // Add tracking for initial world constraints (ship sensor constraints)
+        Events.on(this.engine, 'afterAdd', (event) => {
+            if (event.object.type === 'constraint') {
+                const constraint = event.object;
+                const id = this.generateConstraintId(constraint);
+                if (!this.constraints.has(id)) {
+                    this.constraints.set(id, constraint);
+                    console.log('[Physics] Auto-tracked new constraint:', {
+                        id,
+                        bodyA: constraint.bodyA?.label,
+                        bodyB: constraint.bodyB?.label
+                    });
+                }
+            }
+        });
+    }
+
+    generateConstraintId(constraint) {
+        // Generate unique ID based on connected bodies
+        const bodyALabel = constraint.bodyA?.label || 'none';
+        const bodyBLabel = constraint.bodyB?.label || 'none';
+        const timestamp = Date.now();
+        return `constraint_${bodyALabel}_${bodyBLabel}_${timestamp}`;
     }
 
     isSensorCollision(bodyA, bodyB) {
@@ -113,15 +150,43 @@ export class PhysicsManager {
     }
 
     addConstraint(id, constraint) {
+        console.log('[Physics] Adding constraint:', {
+            id,
+            bodyA: constraint.bodyA?.label,
+            bodyB: constraint.bodyB?.label,
+            stiffness: constraint.stiffness
+        });
+
         World.add(this.world, constraint);
         this.constraints.set(id, constraint);
+        
+        // Verify addition
+        console.log('[Physics] Constraint added:', {
+            id,
+            isInWorld: this.world.constraints.includes(constraint),
+            isTracked: this.constraints.has(id),
+            totalConstraints: this.constraints.size,
+            worldTotal: this.world.constraints.length
+        });
     }
 
     removeConstraint(id) {
         const constraint = this.constraints.get(id);
         if (constraint) {
+            console.log('[Physics] Removing constraint:', {
+                id,
+                bodyA: constraint.bodyA?.label,
+                bodyB: constraint.bodyB?.label,
+                wasActive: this.world.constraints.includes(constraint)
+            });
+
             World.remove(this.world, constraint);
             this.constraints.delete(id);
+
+            console.log('[Physics] Remaining constraints:', {
+                total: this.constraints.size,
+                ids: Array.from(this.constraints.keys())
+            });
         }
     }
 
@@ -172,14 +237,22 @@ export class PhysicsManager {
     }
 
     constrainBodies(bodyA, bodyB) {
+        // bodyA should be the more "stable" or parent object
+        // bodyB is the one being constrained to bodyA
         const constraint = Constraint.create({
-            bodyA: bodyA,
-            bodyB: bodyB,
+            bodyA: bodyA,          // Parent/stable body
+            bodyB: bodyB,          // Child/constrained body
+            pointA: { x: 0, y: 0 },
+            pointB: { x: 0, y: 0 },
             stiffness: 1,
             length: 0
         });
         
+        const constraintId = this.generateConstraintId(constraint);
+        this.constraints.set(constraintId, constraint);
         World.add(this.world, constraint);
+        
+        this.logConstraintDetails(constraint, constraintId);
         return constraint;
     }
 
@@ -250,6 +323,165 @@ export class PhysicsManager {
         // ...existing cleanup code...
         this.constraints.forEach((constraint, id) => {
             this.removeConstraint(id);
+        });
+    }
+
+    createMountConstraint(playerId, shipId, mountPoint) {
+        // Ship is always bodyA (the parent/anchor)
+        // Player is always bodyB (the attached/child)
+        const bodyA = this.bodies.get(`${shipId}_hull`);    // Ship
+        const bodyB = this.bodies.get(playerId);            // Player
+
+        if (!bodyA || !bodyB) {
+            console.warn('[Physics] Mount constraint failed:', {
+                shipId,
+                playerId,
+                hasShip: !!bodyA,
+                hasPlayer: !!bodyB
+            });
+            return null;
+        }
+
+        // Calculate mount point relative to ship (bodyA)
+        const relativePoint = {
+            x: mountPoint.x - bodyA.position.x,
+            y: mountPoint.y - bodyA.position.y
+        };
+
+        const constraint = Constraint.create({
+            bodyA: bodyA,              // Ship is anchor
+            bodyB: bodyB,              // Player is attached
+            pointA: relativePoint,     // Relative to ship's center
+            pointB: { x: 0, y: 0 },    // Player's center point
+            stiffness: 1,
+            damping: 0.1,
+            length: 0
+        });
+
+        console.log('[Physics] Creating mount constraint:', {
+            anchor: {
+                body: bodyA.label,
+                worldPos: bodyA.position,
+                attachPoint: {
+                    relative: relativePoint,
+                    world: mountPoint
+                }
+            },
+            attached: {
+                body: bodyB.label,
+                worldPos: bodyB.position,
+                attachPoint: { x: 0, y: 0 }  // Center
+            }
+        });
+
+        const constraintId = `mount_${playerId}_${shipId}`;
+        this.addConstraint(constraintId, constraint);
+        return constraint;
+    }
+
+    logConstraints() {
+        // First sync with world constraints
+        this.syncConstraints();
+
+        const constraintDetails = Array.from(this.constraints.entries()).map(([id, constraint]) => ({
+            id,
+            bodyA: constraint.bodyA?.label || 'none',
+            bodyB: constraint.bodyB?.label || 'none',
+            type: constraint.type,
+            stiffness: constraint.stiffness,
+            pointA: constraint.pointA,
+            pointB: constraint.pointB,
+            isActive: this.world.constraints.includes(constraint)
+        }));
+
+        console.log('[Physics] Active constraints:', {
+            total: this.constraints.size,
+            worldTotal: this.world.constraints.length,
+            constraints: constraintDetails,
+            worldConstraints: this.world.constraints.map(c => ({
+                bodyA: c.bodyA?.label,
+                bodyB: c.bodyB?.label
+            }))
+        });
+    }
+
+    syncConstraints() {
+        // Add any world constraints not in our map
+        this.world.constraints.forEach(constraint => {
+            let found = false;
+            for (const [id, tracked] of this.constraints) {
+                if (tracked === constraint) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const id = this.generateConstraintId(constraint);
+                this.constraints.set(id, constraint);
+                console.log('[Physics] Synced untracked constraint:', {
+                    id,
+                    bodyA: constraint.bodyA?.label,
+                    bodyB: constraint.bodyB?.label
+                });
+            }
+        });
+
+        // Remove any tracked constraints not in world
+        for (const [id, constraint] of this.constraints) {
+            if (!this.world.constraints.includes(constraint)) {
+                this.constraints.delete(id);
+                console.log('[Physics] Removed stale constraint:', id);
+            }
+        }
+
+        // Log all constraints periodically
+        console.log('[Physics] All active constraints:', 
+            this.world.constraints.map(c => ({
+                id: Array.from(this.constraints.entries())
+                    .find(([id, cons]) => cons === c)?.[0] || 'unknown',
+                bodyA: c.bodyA?.label,
+                bodyB: c.bodyB?.label,
+                pointA: c.pointA,
+                pointB: c.pointB,
+                stiffness: c.stiffness,
+                isActive: this.world.constraints.includes(c)
+            }))
+        );
+    }
+
+    logConstraintDetails(constraint, id = 'unknown') {
+        console.log('[Physics] Constraint details:', {
+            id,
+            bodies: {
+                bodyA: {
+                    label: constraint.bodyA?.label || 'none',
+                    position: constraint.bodyA?.position || 'none',
+                    id: constraint.bodyA?.id || 'none'
+                },
+                bodyB: {
+                    label: constraint.bodyB?.label || 'none',
+                    position: constraint.bodyB?.position || 'none',
+                    id: constraint.bodyB?.id || 'none'
+                }
+            },
+            points: {
+                pointA: constraint.pointA,
+                pointB: constraint.pointB,
+                anchorA: {
+                    x: constraint.bodyA?.position.x + (constraint.pointA?.x || 0),
+                    y: constraint.bodyA?.position.y + (constraint.pointA?.y || 0)
+                },
+                anchorB: {
+                    x: constraint.bodyB?.position.x + (constraint.pointB?.x || 0),
+                    y: constraint.bodyB?.position.y + (constraint.pointB?.y || 0)
+                }
+            },
+            properties: {
+                stiffness: 0,
+                damping: constraint.damping,
+                length: constraint.length,
+                angularStiffness: constraint.angularStiffness
+            }
         });
     }
 

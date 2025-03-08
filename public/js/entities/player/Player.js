@@ -717,16 +717,18 @@ export class Player {
     }
 
     mountModule(module) {
-        console.log('[Player] Attempting to mount module:', {
+        console.log('[Player] DEBUG: Mount attempt without constraint:', {
             playerState: {
                 isBoarded: this.state.isBoarded,
                 shipId: this.state.boardedShipId,
-                currentCategory: this.state.currentCollisionCategory
+                pos: this.physicsBody?.position,
+                vel: this.physicsBody?.velocity
             },
             module: {
                 id: module?.id,
                 type: module?.constructor.name,
-                shipId: module?.ship?.id
+                pos: module?.worldPosition,
+                mountOffset: module?.getMountPosition()
             }
         });
 
@@ -735,68 +737,45 @@ export class Player {
             return false;
         }
         
-        // Verify module belongs to current ship
-        if (module.ship.id !== this.state.boardedShipId) {
-            console.warn('[Player] Mount failed: Module belongs to different ship', {
-                moduleShipId: module.ship.id,
-                playerShipId: this.state.boardedShipId
-            });
-            return false;
-        }
-
-        // Get mount offset from module
-        const mountOffset = module.getMountPosition();
-        
-        // Calculate final world position
-        const mountPos = {
-            x: module.worldPosition.x + mountOffset.x,
-            y: module.worldPosition.y + mountOffset.y
-        };
-
-        console.log('[Player] Mounting position calculation:', {
-            modulePos: module.worldPosition,
-            mountOffset,
-            finalPos: mountPos,
-            moduleRotation: module.worldRotation
-        });
-
-        // Set player position and make static
-        Body.setStatic(this.physicsBody, true);
-        Body.setPosition(this.physicsBody, mountPos);
-        Body.setAngle(this.physicsBody, module.worldRotation); // Match module's rotation
-
-        // Change collision category to mounted
+        // Skip constraint creation, just update state and category
         this.setCollisionCategory('PLAYER_MOUNTED');
         this.state.mountedModule = module;
+
+        // Log mount state for debugging
+        console.log('[Player] DEBUG: Mount state updated:', {
+            moduleId: module.id,
+            playerCategory: this.state.currentCollisionCategory,
+            physics: {
+                pos: this.physicsBody.position,
+                vel: this.physicsBody.velocity,
+                angle: this.physicsBody.angle
+            }
+        });
 
         return true;
     }
 
     unmountModule() {
-        console.log('[Player] Attempting to unmount from module:', {
+        if (!this.state.mountedModule) return;
+
+        console.log('[Player] DEBUG: Unmount without constraint:', {
             moduleId: this.state.mountedModule?.id,
-            currentCategory: this.state.currentCollisionCategory,
-            isStatic: this.physicsBody?.isStatic,
-            filter: this.physicsBody?.collisionFilter
+            playerState: {
+                pos: this.physicsBody?.position,
+                vel: this.physicsBody?.velocity
+            }
         });
 
-        if (!this.state.mountedModule) {
-            console.warn('[Player] Unmount failed: Not mounted to any module');
-            return;
-        }
-        
-        // Return to normal boarded state
-        Body.setStatic(this.physicsBody, false);
-        this.setCollisionCategory('BOARDED_PLAYER');  // Change back to BOARDED_PLAYER
-
-        const previousModule = this.state.mountedModule;
+        // Just reset state and category
+        this.setCollisionCategory('BOARDED_PLAYER');
         this.state.mountedModule = null;
 
-        console.log('[Player] Module unmounted successfully:', {
-            previousModuleId: previousModule.id,
-            newCategory: this.state.currentCollisionCategory,
-            isStatic: this.physicsBody.isStatic,
-            filter: this.physicsBody.collisionFilter
+        console.log('[Player] DEBUG: Unmount complete:', {
+            category: this.state.currentCollisionCategory,
+            physics: {
+                pos: this.physicsBody.position,
+                vel: this.physicsBody.velocity
+            }
         });
     }
 
