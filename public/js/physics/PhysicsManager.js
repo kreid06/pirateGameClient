@@ -1,5 +1,6 @@
 import { Engine, World, Bodies, Body, Events, Runner, Constraint } from 'matter-js';
 import { CollisionSystem } from './CollisionSystem.js';
+import { Sail } from '../entities/components/Component.js'; // Add this import
 
 export class PhysicsManager {
     constructor() {
@@ -86,6 +87,41 @@ export class PhysicsManager {
                 }
             }
         });
+
+        // Add wind system
+        this.wind = {
+            direction: 0,  // Radians, 0 is east, increases clockwise
+            force: 0.0005,  // Increased base force magnitude
+            maxSpeed: 5,     // Maximum speed any ship can achieve from wind
+            update: (deltaTime) => {
+                // Could add wind changes over time here
+                return {
+                    direction: this.wind.direction,
+                    force: this.wind.force
+                };
+            },
+            getForceForShip: (ship) => {
+                // Calculate total force from all sails
+                let totalForce = 0;
+                ship.modules.forEach(module => {
+                    if (module instanceof Sail && module.openness > 0) {
+                        // Scale force by sail efficiency and openness
+                        totalForce += this.wind.force * 
+                                    module.windEfficiency * 
+                                    module.openness;
+                    }
+                });
+
+                // Scale by ship's current speed
+                const shipSpeed = Math.hypot(
+                    ship.physicsBody.velocity.x,
+                    ship.physicsBody.velocity.y
+                );
+                const speedScale = Math.max(0, 1 - (shipSpeed / this.wind.maxSpeed));
+
+                return totalForce * speedScale;
+            }
+        };
     }
 
     generateConstraintId(constraint) {
@@ -218,6 +254,41 @@ export class PhysicsManager {
             this.collisionSystem.debugCollisionState();
         }
 
+        // Update wind and apply forces to ships
+        const windState = this.wind.update(deltaTime);
+        this.world.bodies.forEach(body => {
+            if (body.plugin?.ship) {
+                const ship = body.plugin.ship;
+                const windForce = this.wind.getForceForShip(ship);
+                
+                if (windForce > 0) {
+                    // Apply force in ship's forward direction using Matter.js Body.applyForce
+                    const shipAngle = body.angle;
+                    const force = {
+                        x: Math.cos(shipAngle) * windForce,
+                        y: Math.sin(shipAngle) * windForce
+                    };
+                    
+                    // Apply force at ship's center of mass
+                    Body.applyForce(
+                        body,
+                        { x: body.position.x, y: body.position.y },
+                        force
+                    );
+
+                    console.log('[Physics] Applied wind force:', {
+                        shipId: ship.id,
+                        force: {
+                            magnitude: windForce,
+                            x: force.x,
+                            y: force.y
+                        },
+                        speed: Math.hypot(body.velocity.x, body.velocity.y)
+                    });
+                }
+            }
+        });
+
         return {
             bodies: this.getBodiesState(),
             time: this.engine.timing.timestamp
@@ -327,56 +398,9 @@ export class PhysicsManager {
     }
 
     createMountConstraint(playerId, shipId, mountPoint) {
-        // Ship is always bodyA (the parent/anchor)
-        // Player is always bodyB (the attached/child)
-        const bodyA = this.bodies.get(`${shipId}_hull`);    // Ship
-        const bodyB = this.bodies.get(playerId);            // Player
-
-        if (!bodyA || !bodyB) {
-            console.warn('[Physics] Mount constraint failed:', {
-                shipId,
-                playerId,
-                hasShip: !!bodyA,
-                hasPlayer: !!bodyB
-            });
-            return null;
-        }
-
-        // Calculate mount point relative to ship (bodyA)
-        const relativePoint = {
-            x: mountPoint.x - bodyA.position.x,
-            y: mountPoint.y - bodyA.position.y
-        };
-
-        const constraint = Constraint.create({
-            bodyA: bodyA,              // Ship is anchor
-            bodyB: bodyB,              // Player is attached
-            pointA: relativePoint,     // Relative to ship's center
-            pointB: { x: 0, y: 0 },    // Player's center point
-            stiffness: 1,
-            damping: 0.1,
-            length: 0
-        });
-
-        console.log('[Physics] Creating mount constraint:', {
-            anchor: {
-                body: bodyA.label,
-                worldPos: bodyA.position,
-                attachPoint: {
-                    relative: relativePoint,
-                    world: mountPoint
-                }
-            },
-            attached: {
-                body: bodyB.label,
-                worldPos: bodyB.position,
-                attachPoint: { x: 0, y: 0 }  // Center
-            }
-        });
-
-        const constraintId = `mount_${playerId}_${shipId}`;
-        this.addConstraint(constraintId, constraint);
-        return constraint;
+        // Temporarily disabled for debugging
+        console.log('[Physics] Mount constraints disabled for debugging');
+        return null;
     }
 
     logConstraints() {

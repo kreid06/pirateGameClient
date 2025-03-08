@@ -723,39 +723,19 @@ export class Player {
     }
 
     mountModule(module) {
-        console.log('[Player] DEBUG: Mount attempt without constraint:', {
-            playerState: {
-                isBoarded: this.state.isBoarded,
-                shipId: this.state.boardedShipId,
-                pos: this.physicsBody?.position,
-                vel: this.physicsBody?.velocity
-            },
-            module: {
-                id: module?.id,
-                type: module?.constructor.name,
-                pos: module?.worldPosition,
-                mountOffset: module?.getMountPosition()
-            }
-        });
-
+        // Simplified mount - only state changes, no physics
         if (!this.state.isBoarded || !module) {
             console.warn('[Player] Mount failed: Not boarded or invalid module');
             return false;
         }
         
-        // Skip constraint creation, just update state and category
         this.setCollisionCategory('PLAYER_MOUNTED');
         this.state.mountedModule = module;
 
-        // Log mount state for debugging
-        console.log('[Player] DEBUG: Mount state updated:', {
+        console.log('[Player] DEBUG: Simple mount completed:', {
             moduleId: module.id,
-            playerCategory: this.state.currentCollisionCategory,
-            physics: {
-                pos: this.physicsBody.position,
-                vel: this.physicsBody.velocity,
-                angle: this.physicsBody.angle
-            }
+            moduleType: module.constructor.name,
+            newCategory: this.state.currentCollisionCategory
         });
 
         return true;
@@ -764,25 +744,11 @@ export class Player {
     unmountModule() {
         if (!this.state.mountedModule) return;
 
-        console.log('[Player] DEBUG: Unmount without constraint:', {
-            moduleId: this.state.mountedModule?.id,
-            playerState: {
-                pos: this.physicsBody?.position,
-                vel: this.physicsBody?.velocity
-            }
-        });
-
-        // Just reset state and category
+        // Simple unmount - just reset state
         this.setCollisionCategory('BOARDED_PLAYER');
         this.state.mountedModule = null;
 
-        console.log('[Player] DEBUG: Unmount complete:', {
-            category: this.state.currentCollisionCategory,
-            physics: {
-                pos: this.physicsBody.position,
-                vel: this.physicsBody.velocity
-            }
-        });
+        console.log('[Player] DEBUG: Simple unmount complete');
     }
 
     getShipById(shipId) {

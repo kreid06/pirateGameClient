@@ -499,7 +499,7 @@ export class Sail extends ShipComponent {
         super(x, y, r, id, quality);
         this.efficiency = efficiency || 1;
         this.openness = 0; // 0 to 1
-        this.targetOpenness = 0;
+        this.targetOpenness = 1;
         this.windResistance = 0.8;
         this.maxSpeed = 5 * this.efficiency;
 
@@ -526,6 +526,10 @@ export class Sail extends ShipComponent {
                 y: Math.sin(angle + Math.PI/2) * -10
             };
         };
+
+        // Add wind force properties
+        this.windEfficiency = (efficiency || 1) * 2.0;  // Double efficiency
+        this.maxWindForce = 0.001;  // Increased max force
     }
 
     createPhysicsBody(physicsManager, parentBody) {
@@ -807,6 +811,26 @@ export class Sail extends ShipComponent {
         // }
     }
 
+    getWindForceContribution(shipWindForce) {
+        if (this.openness <= 0) return 0;
+        
+        // Calculate force with increased multipliers
+        const force = shipWindForce.base * 
+                     this.windEfficiency * 
+                     Math.pow(this.openness, 2) * // Square the openness for more dramatic effect
+                     shipWindForce.sailMultiplier * 
+                     2.0; // Additional multiplier
+
+        // Scale by ship speed with softer falloff
+        const shipSpeed = Math.hypot(
+            this.ship.physicsBody.velocity.x,
+            this.ship.physicsBody.velocity.y
+        );
+        
+        const speedScale = Math.max(0, 1 - Math.pow(shipSpeed / shipWindForce.maxSpeed, 2));
+        
+        return force * speedScale;
+    }
 }
 
 // SpeedSail and ShipCannon can now use the base bindToShip method

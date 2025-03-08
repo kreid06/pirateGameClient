@@ -23,8 +23,15 @@ export class Ship {
         this.sailState = {
             isOpen: false,
             transitionSpeed: 0.1,  // Speed of sail opening/closing
-            targetOpenness: 0,     // Target sail state (0-1)
+            targetOpenness: 1,     // Target sail state (0-1)
             currentOpenness: 0     // Current sail state (0-1)
+        };
+
+        // Adjust wind force values for better movement
+        this.windForce = {
+            base: 0.0001,       // Increased base force
+            maxSpeed: 4,        // Increased max speed
+            sailMultiplier: 1.0 // Full sail effect
         };
     }
     
@@ -95,6 +102,27 @@ export class Ship {
                 }
             });
         }
+    }
+
+    calculateWindForce() {
+        let totalForce = 0;
+        
+        // Sum up force contribution from each sail
+        this.modules.forEach(module => {
+            if (module instanceof Sail) {
+                const sailForce = module.getWindForceContribution(this.windForce);
+                totalForce += sailForce;
+            }
+        });
+
+        console.log('[Ship] Wind force:', {
+            shipId: this.id,
+            totalForce,
+            sailState: this.sailState,
+            speed: this.physicsBody?.velocity
+        });
+
+        return totalForce;
     }
 
     render(ctx) {

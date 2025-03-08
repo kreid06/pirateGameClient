@@ -73,7 +73,7 @@ export class CollisionSystem {
             },
             PLAYER_MOUNTED: {
                 category: this.categories.PLAYER_MOUNTED,
-                mask: this.categories.SHIP_DETECT | this.categories.MODULE_INTERACT,  // Add SHIP_MODULE
+                mask: this.categories.SHIP_DETECT,  // Add SHIP_MODULE
                 group: this.groups.PLAYERS 
             }
         };
