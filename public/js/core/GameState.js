@@ -91,6 +91,20 @@ export class GameState {
     applyInput(input) {
         if (!this.player || !input) return;
 
+        // console.log('[GameState] Processing input:', {
+        //     input: {
+        //         forward: input.forward,
+        //         backward: input.backward,
+        //         strafeLeft: input.strafeLeft,
+        //         strafeRight: input.strafeRight
+        //     },
+        //     playerState: {
+        //         mounted: this.player.state?.mountedModule?.constructor.name,
+        //         isBoarded: this.player.state?.isBoarded,
+        //         boardedShipId: this.player.state?.boardedShipId
+        //     }
+        // });
+
         // Update rotation to face mouse
         if (input.mousePos) {
             const angle = Math.atan2(
@@ -101,8 +115,8 @@ export class GameState {
             this.rotation = angle;
         }
 
-        // Apply movement through player
-        this.player.applyMovementForce(input);
+        // Pass input to player's handleInput method instead of just movement
+        this.player.handleInput(input);
     }
 
     update(deltaTime) {

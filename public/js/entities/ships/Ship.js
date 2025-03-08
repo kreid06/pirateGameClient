@@ -18,6 +18,14 @@ export class Ship {
             density: 0.001,          // Low density for better floating
             angularDamping: 0.05     // Rotation resistance
         };
+
+        // Add sail state
+        this.sailState = {
+            isOpen: false,
+            transitionSpeed: 0.1,  // Speed of sail opening/closing
+            targetOpenness: 0,     // Target sail state (0-1)
+            currentOpenness: 0     // Current sail state (0-1)
+        };
     }
     
     // ...existing ship methods...
@@ -71,6 +79,22 @@ export class Ship {
                 module.update(deltaTime);
             }
         });
+
+        // Update sail state
+        if (this.sailState.currentOpenness !== this.sailState.targetOpenness) {
+            const direction = this.sailState.targetOpenness > this.sailState.currentOpenness ? 1 : -1;
+            this.sailState.currentOpenness += direction * this.sailState.transitionSpeed * (deltaTime / 1000);
+            
+            // Clamp value
+            this.sailState.currentOpenness = Math.max(0, Math.min(1, this.sailState.currentOpenness));
+            
+            // Update sail visuals
+            this.modules.forEach(module => {
+                if (module instanceof Sail) {
+                    module.updateOpenness(this.sailState.currentOpenness);
+                }
+            });
+        }
     }
 
     render(ctx) {
@@ -358,6 +382,53 @@ export class Ship {
     generateModuleId() {
         // Use consistent format for module IDs
         return `${this.id}_module_${Math.random().toString(36).substr(2, 6)}`;
+    }
+
+    setSailState(isOpen) {
+        console.log('[Ship] Sail state change requested:', {
+            shipId: this.id,
+            fromState: this.sailState.isOpen,
+            toState: isOpen,
+            currentOpenness: this.sailState.currentOpenness,
+            targetOpenness: isOpen ? 1 : 0,
+            modules: {
+                total: this.modules.size,
+                sails: Array.from(this.modules.values())
+                    .filter(m => m instanceof Sail)
+                    .map(sail => ({
+                        id: sail.id,
+                        currentOpenness: sail.openness,
+                        position: sail.position
+                    }))
+            }
+        });
+
+        this.sailState.isOpen = isOpen;
+        this.sailState.targetOpenness = isOpen ? 1 : 0;
+
+        let sailsUpdated = 0;
+        this.modules.forEach(module => {
+            if (module instanceof Sail) {
+                module.setOpenState(isOpen);
+                sailsUpdated++;
+                console.log('[Ship] Sail module updated:', {
+                    moduleId: module.id,
+                    isOpen: isOpen,
+                    openness: module.openness,
+                    targetOpenness: module.targetOpenness
+                });
+            }
+        });
+
+        console.log('[Ship] Sail update complete:', {
+            shipId: this.id,
+            sailsUpdated,
+            finalState: {
+                isOpen: this.sailState.isOpen,
+                target: this.sailState.targetOpenness,
+                current: this.sailState.currentOpenness
+            }
+        });
     }
 }
 

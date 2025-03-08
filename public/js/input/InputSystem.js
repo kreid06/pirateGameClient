@@ -147,25 +147,27 @@ export class InputSystem {
     }
 
     getInput(playerPos, viewport) {
-        // Check if player is mounted - if so, only return mouse position
-        if (this.state?.playerState?.mountedModule) {
-            return {
-                forward: false,
-                backward: false,
-                strafeLeft: false,
-                strafeRight: false,
-                mousePos: this.getWorldMousePosition(playerPos, viewport)
-            };
-        }
-
-        // Otherwise return normal movement input
-        return {
+        // Always get the current input state, regardless of mount status
+        const input = {
             forward: this.keyStates.forward,
             backward: this.keyStates.backward,
             strafeLeft: this.keyStates.strafeLeft,
             strafeRight: this.keyStates.strafeRight,
             mousePos: this.getWorldMousePosition(playerPos, viewport)
         };
+
+        // Log the input state when mounted
+        // if (this.state?.playerState?.mountedModule) {
+        //     console.log('[Input] Mounted input state:', {
+        //         moduleType: this.state.playerState.mountedModule.constructor.name,
+        //         input: {
+        //             forward: input.forward,
+        //             backward: input.backward
+        //         }
+        //     });
+        // }
+
+        return input;
     }
 
     setState(state) {

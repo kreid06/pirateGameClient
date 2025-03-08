@@ -12,11 +12,11 @@ export class Player {
         // Adjust physics properties for better movement
         this.physics = {
             radius: 10,  // Halved from 20
-            friction: 0.01,
+            friction: 0.001,        // Reduced from 0.01
             frictionAir: 0.1,     // Reduced air friction
             mass: 0.001,              // Reduced mass
             density: 0.0001,
-            restitution: 0.2,
+            restitution: 0.1,      // Reduced from 0.2 for less bouncing
             maxForce: 0.000025,       // Increased force
             maxSpeed: 4,           // Increased speed
             acceleration: 0.01,
@@ -56,6 +56,12 @@ export class Player {
             shipDetectionTimeout: 1000,  // 1 second timeout
             mountedModule: null,
             canInteractWithModule: true
+        };
+
+        // Add sail control state
+        this.controls = {
+            lastSailToggle: 0,
+            sailToggleCooldown: 500  // 500ms cooldown
         };
 
         this.init();
@@ -789,5 +795,43 @@ export class Player {
             .filter(ship => ship?.id === shipId);
 
         return ships[0] || null;
+    }
+
+    handleInput(input) {
+        // Only apply movement forces if not mounted to steering wheel
+        if (!this.state.mountedModule || 
+            this.state.mountedModule.constructor.name !== 'SteeringWheel') {
+            this.applyMovementForce(input);
+        }
+
+        // Handle sail controls when mounted to steering wheel
+        if (this.state.mountedModule?.constructor.name === 'SteeringWheel') {
+            const now = Date.now();
+            const timeSinceLastToggle = now - this.controls.lastSailToggle;
+
+            if (timeSinceLastToggle > this.controls.sailToggleCooldown) {
+                if (input.forward || input.backward) {
+                    const ship = this.getShipById(this.state.boardedShipId);
+                    if (ship) {
+                        const newSailState = input.forward;
+                        console.log('[Player] Executing sail control:', {
+                            type: 'sails',
+                            action: newSailState ? 'OPEN' : 'CLOSE',
+                            mountedTo: 'SteeringWheel',
+                            movementBlocked: true,
+                            ship: {
+                                id: ship.id,
+                                currentState: ship.sailState
+                            }
+                        });
+
+                        ship.setSailState(newSailState);
+                        this.controls.lastSailToggle = now;
+                    } else {
+                        console.warn('[Player] Could not find ship for sail control:', this.state.boardedShipId);
+                    }
+                }
+            }
+        }
     }
 }

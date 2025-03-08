@@ -394,15 +394,15 @@ export class PhysicsManager {
             isActive: this.world.constraints.includes(constraint)
         }));
 
-        console.log('[Physics] Active constraints:', {
-            total: this.constraints.size,
-            worldTotal: this.world.constraints.length,
-            constraints: constraintDetails,
-            worldConstraints: this.world.constraints.map(c => ({
-                bodyA: c.bodyA?.label,
-                bodyB: c.bodyB?.label
-            }))
-        });
+        // console.log('[Physics] Active constraints:', {
+        //     total: this.constraints.size,
+        //     worldTotal: this.world.constraints.length,
+        //     constraints: constraintDetails,
+        //     worldConstraints: this.world.constraints.map(c => ({
+        //         bodyA: c.bodyA?.label,
+        //         bodyB: c.bodyB?.label
+        //     }))
+        // });
     }
 
     syncConstraints() {
@@ -435,18 +435,18 @@ export class PhysicsManager {
         }
 
         // Log all constraints periodically
-        console.log('[Physics] All active constraints:', 
-            this.world.constraints.map(c => ({
-                id: Array.from(this.constraints.entries())
-                    .find(([id, cons]) => cons === c)?.[0] || 'unknown',
-                bodyA: c.bodyA?.label,
-                bodyB: c.bodyB?.label,
-                pointA: c.pointA,
-                pointB: c.pointB,
-                stiffness: c.stiffness,
-                isActive: this.world.constraints.includes(c)
-            }))
-        );
+        // console.log('[Physics] All active constraints:', 
+        //     this.world.constraints.map(c => ({
+        //         id: Array.from(this.constraints.entries())
+        //             .find(([id, cons]) => cons === c)?.[0] || 'unknown',
+        //         bodyA: c.bodyA?.label,
+        //         bodyB: c.bodyB?.label,
+        //         pointA: c.pointA,
+        //         pointB: c.pointB,
+        //         stiffness: c.stiffness,
+        //         isActive: this.world.constraints.includes(c)
+        //     }))
+        // );
     }
 
     logConstraintDetails(constraint, id = 'unknown') {

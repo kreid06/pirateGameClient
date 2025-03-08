@@ -42,6 +42,14 @@ export class ShipComponent {
             y: -30,
             radius: this.getInteractionRadius() 
         };
+
+        // Add minimal friction physics properties for module collisions
+        this.physics = {
+            friction: 0.001,        // Very low friction
+            frictionAir: 0,         // No air friction
+            restitution: 0.1,       // Low bounce
+            density: 0.001          // Low density
+        };
     }
 
     getInteractionRadius() {
@@ -89,7 +97,11 @@ export class ShipComponent {
             collisionFilter: physicsManager.collisionSystem.getCollisionFilter(
                 this instanceof Sail ? 'SHIP_MODULE_NON_INTERACT' : 'SHIP_MODULE'
             ),
-            plugin: { component: this }
+            plugin: { component: this },
+            friction: this.physics.friction,
+            frictionAir: this.physics.frictionAir,
+            restitution: this.physics.restitution,
+            density: this.physics.density
         };
 
         this.physicsBody = this.physicsShape.type === 'circle' 
@@ -400,7 +412,11 @@ export class Cannon extends ShipComponent {
             collisionFilter: physicsManager.collisionSystem.getCollisionFilter(
                 this instanceof Sail ? 'SHIP_MODULE_NON_INTERACT' : 'SHIP_MODULE'
             ),
-            plugin: { component: this }
+            plugin: { component: this },
+            friction: this.physics.friction,
+            frictionAir: this.physics.frictionAir,
+            restitution: this.physics.restitution,
+            density: this.physics.density
         };
 
         this.physicsBody = this.physicsShape.type === 'circle' 
@@ -483,6 +499,7 @@ export class Sail extends ShipComponent {
         super(x, y, r, id, quality);
         this.efficiency = efficiency || 1;
         this.openness = 0; // 0 to 1
+        this.targetOpenness = 0;
         this.windResistance = 0.8;
         this.maxSpeed = 5 * this.efficiency;
 
@@ -535,7 +552,11 @@ export class Sail extends ShipComponent {
                 isStatic: true,
                 angle: angle,
                 label: `module_mast_${this.id}`,
-                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.mast.collisionMask)
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.mast.collisionMask),
+                friction: this.physics.friction,
+                frictionAir: this.physics.frictionAir,
+                restitution: this.physics.restitution,
+                density: this.physics.density
             }
         );
 
@@ -549,7 +570,11 @@ export class Sail extends ShipComponent {
                 isSensor: true,
                 angle: angle,
                 label: `module_fiber_${this.id}`,
-                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.fiber.collisionMask)
+                collisionFilter: physicsManager.collisionSystem.getCollisionFilter(this.physicsShapes.fiber.collisionMask),
+                friction: this.physics.friction,
+                frictionAir: this.physics.frictionAir,
+                restitution: this.physics.restitution,
+                density: this.physics.density
             }
         );
 
@@ -585,6 +610,9 @@ export class Sail extends ShipComponent {
 
         this.worldPosition = newPos;
         this.worldRotation = shipRot;
+        if(this.targetOpenness !== this.openness) {
+            this.openness += this.targetOpenness > this.openness ? 0.01 : -0.01;
+        }
     }
 
     setOpenness(amount) {
@@ -597,7 +625,7 @@ export class Sail extends ShipComponent {
         ctx.rotate(this.rotation);
         ctx.beginPath();
         ctx.moveTo(0, 130);
-        ctx.quadraticCurveTo(50 + (this.efficiency || 1) * 50, 0, 0, -130);
+        ctx.quadraticCurveTo(50 + ((this.efficiency || 1) * 75) * this.openness, 0, 0, -130);
         ctx.closePath();
         
         ctx.fillStyle = '#ffffff';
@@ -760,6 +788,25 @@ export class Sail extends ShipComponent {
             y: 0         // Same vertical position
         };
     }
+
+    setOpenState(isOpen) {
+        this.targetOpenness += isOpen && this.targetOpenness < 1  ? 0.1 : 0;
+        this.targetOpenness -= !isOpen && this.targetOpenness > 0  ? 0.1 : 0;
+    }
+
+    updateOpenness() {
+        if (this.openness === this.targetOpenness) return;
+        this.targetOpenness += this.targetOpenness <1 ?value:0;
+        this.openness = value;
+        // Update physics properties based on sail state
+        // if (this.physicsBody) {
+        //     Body.set(this.physicsBody, {
+        //         friction: 0.1 + (0.9 * this.openness),  // More friction when open
+        //         frictionAir: 0.01 * this.openness       // More air resistance when open
+        //     });
+        // }
+    }
+
 }
 
 // SpeedSail and ShipCannon can now use the base bindToShip method
