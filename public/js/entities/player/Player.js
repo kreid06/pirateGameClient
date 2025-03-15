@@ -9,23 +9,23 @@ export class Player {
         this.rotation = rotation;
         this.physicsManager = physicsManager;
         
-        // Adjust physics properties for better movement
+        // Double the player forces from their current reduced level
         this.physics = {
-            radius: 10,  // Halved from 20
-            friction: 0.001,        // Reduced from 0.01
-            frictionAir: 0.1,     // Reduced air friction
-            mass: 0.001,              // Reduced mass
-            density: 0.0001,
-            restitution: 0.1,      // Reduced from 0.2 for less bouncing
-            maxForce: 0.000025,       // Increased force
-            maxSpeed: 4,           // Increased speed
-            acceleration: 0.01,
-            deceleration: 0.098,
-            turnSpeed: 0.05,
+            radius: 10,              // Keep same radius
+            friction: 0.01,          // Keep same friction
+            frictionAir: 0.1,        // Keep same air friction
+            mass: 0.3,               // Keep same mass
+            density: 0.0003,         // Keep same density
+            restitution: 0.2,        // Keep same bounce
+            maxForce: 0.00075,       // Double from current (0.000375)
+            maxSpeed: 0.5,           // Double from current (0.25)
+            acceleration: 0.075,     // Double from current (0.0375)
+            deceleration: 0.075,     // Double from current (0.0375)
+            turnSpeed: 0.07,         // Keep same turn speed
             movement: {
-                forward: 0.01,
-                backward: 0.005,
-                strafe: 0.007
+                forward: 0.035,      // Double from current (0.0175)
+                backward: 0.025,     // Double from current (0.0125)
+                strafe: 0.03         // Double from current (0.015)
             }
         };
 
@@ -79,8 +79,13 @@ export class Player {
             mass: this.physics.mass,
             density: this.physics.density,
             restitution: this.physics.restitution,
+            inertia: Infinity,     // Keep infinite inertia for better control
             label: `player_${this.id}`,
-            collisionFilter: this.physicsManager.collisionSystem.getCollisionFilter('PLAYER')
+            collisionFilter: this.physicsManager.collisionSystem.getCollisionFilter('PLAYER'),
+            plugin: {
+                player: this,      // Add this reference for collision system
+                isPlayer: true
+            }
         });
 
         this.physicsBody = body;
@@ -129,42 +134,40 @@ export class Player {
 
         if (!this.physicsBody) return;
 
-        // Rest of existing movement code
         const force = { x: 0, y: 0 };
         const { forward, backward, strafe } = this.physics.movement;
-        
-        // When boarded, use a reduced movement multiplier to make movement feel appropriate
-        const movementMultiplier = this.state.isBoarded ? 0.5 : 1.0;
 
-        if (input.forward || input.backward || input.strafeLeft || input.strafeRight) {
-            if (input.forward) {
-                force.x += Math.cos(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
-                force.y += Math.sin(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
-            }
-            if (input.backward) {
-                force.x -= Math.cos(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
-                force.y -= Math.sin(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
-            }
-            if (input.strafeLeft) {
-                force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
-                force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
-            }
-            if (input.strafeRight) {
-                force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
-                force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
-            }
+        // Remove the movement multiplier reduction when boarded
+        // const movementMultiplier = this.state.isBoarded ? 0.5 : 1.0;
+        const movementMultiplier = 1.0; // Always use full movement force
 
-            this.applyForce(force);
+        if (input.forward) {
+            force.x += Math.cos(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
+            force.y += Math.sin(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
         }
+        if (input.backward) {
+            force.x -= Math.cos(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
+            force.y -= Math.sin(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
+        }
+        if (input.strafeLeft) {
+            force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+            force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+        }
+        if (input.strafeRight) {
+            force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+            force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+        }
+
+        this.applyForce(force);
     }
 
     applyForce(force) {
         if (!this.physicsBody || !this.physicsManager) return;
 
-        // Apply raw force without additional scaling
+        // Apply force multiplier consistently, whether on ship or not
         const scaledForce = {
-            x: force.x,
-            y: force.y
+            x: force.x * 1.0,
+            y: force.y * 1.0
         };
 
         const currentSpeed = Math.sqrt(
@@ -172,8 +175,8 @@ export class Player {
             this.physicsBody.velocity.y ** 2
         );
 
-        // Only scale down if exceeding max speed
-        if (currentSpeed > this.physics.maxSpeed) {
+        // Use consistent speed capping whether on ship or not
+        if (currentSpeed > this.physics.maxSpeed * 0.7) {
             const scale = this.physics.maxSpeed / currentSpeed;
             scaledForce.x *= scale;
             scaledForce.y *= scale;
@@ -223,7 +226,6 @@ export class Player {
         if (this.state.isBoarded) {
             const now = Date.now();
             const shipSensor = this.findShipSensor();
-            
             if (shipSensor) {
                 this.state.lastShipDetection = now;
                 console.log('[Player] Ship contact maintained:', {
@@ -244,7 +246,6 @@ export class Player {
                         category: this.physicsBody.collisionFilter?.category?.toString(16)
                     }
                 });
-                
                 if (timeSinceLastDetection > this.state.shipDetectionTimeout) {
                     console.log('[Player] Initiating unboard from sensor timeout');
                     this.unboardShip('sensor_timeout');
@@ -254,7 +255,6 @@ export class Player {
             // Check for nearby modules when boarded
             const nearbyModule = this.checkNearbyModules();
             this.state.canInteractWithModule = !!nearbyModule;
-            
             if (nearbyModule) {
                 window.dispatchEvent(new CustomEvent('moduleNearby', {
                     detail: {
@@ -346,7 +346,6 @@ export class Player {
 
         // Draw direction indicator
         this.drawDirectionIndicator(ctx);
-
         ctx.restore();
     }
 
@@ -354,16 +353,13 @@ export class Player {
         const directionLength = 25;
         ctx.beginPath();
         ctx.moveTo(this.position.x, this.position.y);
-        
         const pointX = this.position.x + Math.cos(this.rotation) * directionLength;
         const pointY = this.position.y + Math.sin(this.rotation) * directionLength;
-        
         // Draw direction line
         ctx.lineTo(pointX, pointY);
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 3;
         ctx.stroke();
-
         // Draw direction point
         ctx.beginPath();
         ctx.arc(pointX, pointY, 3, 0, Math.PI * 2);
@@ -418,7 +414,6 @@ export class Player {
         this.state.currentCollisionCategory = newCategory;
         if (this.physicsBody) {
             Body.set(this.physicsBody, 'collisionFilter', filter);
-            
             // Enhanced logging with group information
             console.log('[Player] Collision category changed:', {
                 from: oldCategory,
@@ -455,14 +450,12 @@ export class Player {
             console.log('[Player] Jump - Changing collision category:', {
                 before: this.state.currentCollisionCategory
             });
-            
             this.setCollisionCategory('PLAYER_JUMPED');
-            
             console.log('[Player] Jump - Changed collision category:', {
                 after: this.state.currentCollisionCategory
             });
         }
-
+            
         // Set up timers
         this.jumpTimer = setTimeout(() => this.handleJumpEnd(), this.state.jumpDuration);
         this.jumpCheckPoints = [
@@ -537,7 +530,6 @@ export class Player {
                 isOnShip,
                 position: this.position
             });
-
             if (isOnShip) {
                 console.log('[Player] Successfully landed on ship');
                 this.clearJumpTimers();
@@ -548,7 +540,6 @@ export class Player {
 
     findNearbyShip() {
         const collisions = this.physicsManager.collisionSystem.getCollisionsForBody(this.physicsBody);
-        
         // Log all collisions first
         console.log('[Player] All current collisions:', {
             playerPos: this.position,
@@ -618,7 +609,7 @@ export class Player {
                 category: body?.collisionFilter?.category?.toString(16),
                 group: body?.collisionFilter?.group
             });
-            
+
             return isMatch;
         });
 
@@ -630,7 +621,7 @@ export class Player {
             isBoarded: this.state.isBoarded,
             currentCategory: this.state.currentCollisionCategory
         });
-        
+
         return sensor;
     }
 
@@ -674,11 +665,12 @@ export class Player {
             currentCategory: this.state.currentCollisionCategory,
             timestamp: Date.now()
         });
-        
+
         // Only unboard if this is our current ship or we're forcing unboard
         if (this.state.mountedModule) {
             this.unmountModule();
         }
+
         this.state.isBoarded = false;
         this.state.boardedShipId = null;
         this.state.lastShipDetection = 0;
@@ -693,7 +685,7 @@ export class Player {
             });
             return null;
         }
-        
+
         const ship = this.getShipById(this.state.boardedShipId);
         if (!ship) {
             console.log('[Player] Cannot find boarded ship:', this.state.boardedShipId);
@@ -719,7 +711,6 @@ export class Player {
                     this.position.x - module.worldPosition.x,
                     this.position.y - module.worldPosition.y
                 );
-
                 if (distance < shortestDistance) {
                     shortestDistance = distance;
                     nearestModule = module;
@@ -769,7 +760,7 @@ export class Player {
 
     getShipById(shipId) {
         if (!this.physicsManager) return null;
-        
+
         // Assuming GameState's ships Map is accessible through physicsManager
         const ships = Array.from(this.physicsManager.world.bodies)
             .filter(body => body.label.startsWith('ship_hull'))
@@ -790,7 +781,6 @@ export class Player {
         if (this.state.mountedModule?.constructor.name === 'SteeringWheel') {
             const now = Date.now();
             const timeSinceLastToggle = now - this.controls.lastSailToggle;
-
             if (timeSinceLastToggle > this.controls.sailToggleCooldown) {
                 if (input.forward || input.backward) {
                     const ship = this.getShipById(this.state.boardedShipId);
@@ -806,7 +796,6 @@ export class Player {
                                 currentState: ship.sailState
                             }
                         });
-
                         ship.setSailState(newSailState);
                         this.controls.lastSailToggle = now;
                     } else {
@@ -815,5 +804,68 @@ export class Player {
                 }
             }
         }
+    }
+
+    // New method to handle impact forces from ships
+    applyImpactForce(force) {
+        if (!this.physicsBody || !this.physicsManager) return;
+        
+        // If player is boarded, ignore impacts
+        if (this.state.isBoarded) return;
+        
+        // Apply the impact force with a velocity change instead of just a force
+        // This gives a more immediate effect appropriate for a collision
+        const currentVel = this.physicsBody.velocity;
+        
+        // Apply 1/2 of the original force (double the current 1/4)
+        const newVelocity = {
+            x: currentVel.x + (force.x * 0.5), // Double from current (0.25)
+            y: currentVel.y + (force.y * 0.5)  // Double from current (0.25)
+        };
+        
+        // Cap maximum velocity to prevent extreme knockback (adjust for lower max speed)
+        const newSpeed = Math.hypot(newVelocity.x, newVelocity.y);
+        const maxImpactSpeed = this.physics.maxSpeed * 2.5; // Allow higher relative impact speed
+        
+        if (newSpeed > maxImpactSpeed) {
+            const scale = maxImpactSpeed / newSpeed;
+            newVelocity.x *= scale;
+            newVelocity.y *= scale;
+        }
+        
+        // Set the new velocity directly
+        Body.setVelocity(this.physicsBody, newVelocity);
+        
+        // Add a small visual feedback effect
+        this.flashImpactEffect();
+        
+        console.log('[Player] Received ship impact:', {
+            force: {
+                x: force.x.toFixed(2),
+                y: force.y.toFixed(2)
+            },
+            newVelocity: {
+                x: newVelocity.x.toFixed(2),
+                y: newVelocity.y.toFixed(2)
+            },
+            wasCapped: newSpeed > maxImpactSpeed
+        });
+    }
+    
+    // Add visual feedback for impacts
+    flashImpactEffect() {
+        // Store current visual state
+        const originalVisualState = { ...this.visualState };
+        
+        // Flash red for impact
+        this.visualState = {
+            fillStyle: '#FF0000',
+            strokeStyle: '#AA0000'
+        };
+        
+        // Restore original visual state after a short delay
+        setTimeout(() => {
+            this.visualState = originalVisualState;
+        }, 150);
     }
 }

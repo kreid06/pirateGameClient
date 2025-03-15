@@ -18,9 +18,11 @@ export class PhysicsManager {
 
         // Add friction air to ship bodies
         this.shipPhysicsConfig = {
-            frictionAir: 0.1,       // Increased air friction
-            angularDamping: 0.9,    // High angular damping to prevent spinning
-            torque: 0,              // No initial torque
+            frictionAir: 0.1,        // Match player air friction (increased from 0.001)
+            angularDamping: 0.15,    // Increased angular damping for better stability
+            torque: 0,               // No initial torque
+            mass: 50000,             // Match the increased mass in Ship.js
+            density: 0.01            // Match the density in Ship.js
         };
 
         // Set up all collision events
@@ -90,9 +92,9 @@ export class PhysicsManager {
 
         // Add wind system
         this.wind = {
-            direction: 0,  // Radians, 0 is east, increases clockwise
-            force: 0.0005,  // Increased base force magnitude
-            maxSpeed: 5,     // Maximum speed any ship can achieve from wind
+            direction: 0,            // Radians, 0 is east, increases clockwise
+            force: 0.008,            // 4x increase for stronger wind force
+            maxSpeed: 5,             // Keep same max speed
             update: (deltaTime) => {
                 // Could add wind changes over time here
                 return {
@@ -172,6 +174,15 @@ export class PhysicsManager {
             Body.set(body, {
                 frictionAir: this.shipPhysicsConfig.frictionAir,
                 angularDamping: this.shipPhysicsConfig.angularDamping,
+                mass: this.shipPhysicsConfig.mass,           // Explicitly set mass
+                density: this.shipPhysicsConfig.density      // Explicitly set density
+            });
+            
+            console.log('[Physics] Applied ship physics:', {
+                id, 
+                label: body.label,
+                mass: body.mass,
+                density: body.density
             });
         }
 
@@ -295,8 +306,21 @@ export class PhysicsManager {
         };
     }
 
+    shouldApplyForce(body, force) {
+        // If force is too small relative to body mass, ignore it
+        const forceMagnitude = Math.sqrt(force.x * force.x + force.y * force.y);
+        const massThreshold = body.mass * 0.0001; // Force needs to be > 0.01% of mass
+        
+        return forceMagnitude > massThreshold;
+    }
+    
     applyForce(body, force) {
         if (!body) return;
+        
+        // Skip negligible forces for massive bodies
+        if (body.mass > 1000 && !this.shouldApplyForce(body, force)) {
+            return;
+        }
         
         Body.applyForce(body, 
             body.position,
@@ -507,6 +531,19 @@ export class PhysicsManager {
                 angularStiffness: constraint.angularStiffness
             }
         });
+    }
+
+    // Enhanced ship impact calculation for massive ships
+    handleShipPlayerImpact(playerBody, shipBody) {
+        // ...existing code...
+        
+        // Calculate impact force with much higher mass multiplier
+        const impactForce = {
+            x: (normalizedImpact.x * shipSpeed * shipBody.mass * 0.001) + (shipVelocity.x * 0.8),
+            y: (normalizedImpact.y * shipSpeed * shipBody.mass * 0.001) + (shipVelocity.y * 0.8)
+        };
+        
+        // ...existing code...
     }
 
     // ...rest of existing methods...

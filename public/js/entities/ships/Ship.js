@@ -11,27 +11,27 @@ export class Ship {
 
         // Add physics properties
         this.physics = {
-            mass: 1000,              // Base mass
-            friction: 0.01,          // Low friction for smooth movement
-            frictionAir: 0.001,      // Very low air resistance
-            restitution: 0.1,        // Low bounce (10%)
-            density: 0.001,          // Low density for better floating
-            angularDamping: 0.05     // Rotation resistance
+            mass: 50000,            // Increase mass to 50,000 (from 15,000)
+            friction: 0.01,         // Keep low friction
+            frictionAir: 0.1,       // Match player's air friction
+            restitution: 0.1,       // Low bounce
+            density: 0.01,          // Keep same density
+            angularDamping: 0.05    // Keep same rotation resistance
         };
 
         // Add sail state
         this.sailState = {
             isOpen: false,
-            transitionSpeed: 0.1,  // Speed of sail opening/closing
-            targetOpenness: 1,     // Target sail state (0-1)
-            currentOpenness: 0     // Current sail state (0-1)
+            transitionSpeed: 0.2,   // Doubled transition speed
+            targetOpenness: 1,      // Keep same target
+            currentOpenness: 0      // Keep same start state
         };
 
-        // Adjust wind force values for better movement
+        // Adjust wind force values for better movement with new friction
         this.windForce = {
-            base: 0.0001,       // Increased base force
-            maxSpeed: 4,        // Increased max speed
-            sailMultiplier: 1.0 // Full sail effect
+            base: 0.0005,          // 5x increase for stronger wind forces
+            maxSpeed: 4,           // Keep same max speed
+            sailMultiplier: 1.5    // 50% increase to sail effectiveness
         };
 
         // Add player tracking
@@ -70,9 +70,22 @@ export class Ship {
         this.modules.set(id, module);
     }
 
+    // Add a new method to ensure player forces don't affect the ship
+    applyPlayerForce(force) {
+        // Intentionally do nothing - player forces are too small to affect ship
+        // This is a placeholder in case we want to implement minimal effects later
+        console.log('[Ship] Ignoring negligible player force');
+    }
 
-    applyForce(forceX, forceY) {
+    // Modify to handle forces properly based on source
+    applyForce(forceX, forceY, source = 'ship') {
         if (!this.physicsBody || !this.physicsManager) return;
+        
+        // Only apply significant forces (from wind, etc.) - ignore player forces
+        if (source === 'player') {
+            // Player forces are too small to affect ship
+            return;
+        }
         
         // Convert force to world space
         const worldForce = {

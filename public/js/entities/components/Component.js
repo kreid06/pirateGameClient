@@ -798,17 +798,16 @@ export class Sail extends ShipComponent {
         this.targetOpenness -= !isOpen && this.targetOpenness > 0  ? 0.1 : 0;
     }
 
-    updateOpenness() {
-        if (this.openness === this.targetOpenness) return;
-        this.targetOpenness += this.targetOpenness <1 ?value:0;
+    updateOpenness(value) {
+        if (this.openness === value) return;
+        
+        // Fix the broken code by properly using the value parameter
         this.openness = value;
-        // Update physics properties based on sail state
-        // if (this.physicsBody) {
-        //     Body.set(this.physicsBody, {
-        //         friction: 0.1 + (0.9 * this.openness),  // More friction when open
-        //         frictionAir: 0.01 * this.openness       // More air resistance when open
-        //     });
-        // }
+        
+        // Update physics properties if needed
+        if (this.physicsBody) {
+            // Optional physics updates can go here
+        }
     }
 
     getWindForceContribution(shipWindForce) {

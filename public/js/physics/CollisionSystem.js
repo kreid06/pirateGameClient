@@ -111,6 +111,15 @@ export class CollisionSystem {
         const key = this.getCollisionKey(bodyA, bodyB);
         if (this.collisions.has(key)) return;
 
+        // Determine if this is a ship-player collision
+        const isShipPlayerCollision = this.isShipPlayerCollision(bodyA, bodyB);
+        
+        if (isShipPlayerCollision) {
+            const { playerBody, shipBody } = this.getPlayerShipBodies(bodyA, bodyB);
+            this.handleShipPlayerImpact(playerBody, shipBody);
+        }
+
+        // Continue with normal collision processing
         const collision = {
             bodyA,
             bodyB,
@@ -124,6 +133,109 @@ export class CollisionSystem {
 
         this.collisions.set(key, collision);
         this.activeCollisions.set(key, collision);
+    }
+
+    // New method to check if collision is between ship and player
+    isShipPlayerCollision(bodyA, bodyB) {
+        return (
+            (bodyA.label?.startsWith('player') && bodyB.label?.startsWith('ship_hull')) ||
+            (bodyB.label?.startsWith('player') && bodyA.label?.startsWith('ship_hull'))
+        );
+    }
+    
+    // New method to extract player and ship bodies
+    getPlayerShipBodies(bodyA, bodyB) {
+        if (bodyA.label?.startsWith('player')) {
+            return { playerBody: bodyA, shipBody: bodyB };
+        } else {
+            return { playerBody: bodyB, shipBody: bodyA };
+        }
+    }
+    
+    // Modify the handleShipPlayerImpact method to ensure proper force ratio
+    handleShipPlayerImpact(playerBody, shipBody) {
+        // Only apply impact if player is not already on the ship
+        if (playerBody.collisionFilter.category === this.categories.BOARDED_PLAYER) {
+            return; // Player is already on the ship, don't apply impact
+        }
+        
+        // Get the ship's velocity
+        const shipVelocity = shipBody.velocity;
+        const shipSpeed = Math.hypot(shipVelocity.x, shipVelocity.y);
+        
+        // Only apply impact for significant ship speed
+        if (shipSpeed < 0.5) return;
+        
+        // Calculate impact direction (from ship to player)
+        const impactVector = {
+            x: playerBody.position.x - shipBody.position.x,
+            y: playerBody.position.y - shipBody.position.y
+        };
+        
+        // Normalize the impact vector
+        const impactLength = Math.hypot(impactVector.x, impactVector.y);
+        const normalizedImpact = {
+            x: impactVector.x / impactLength,
+            y: impactVector.y / impactLength
+        };
+        
+        // Calculate impact force with extreme mass ratio consideration
+        // This was missing in the original implementation
+        const massRatio = playerBody.mass / shipBody.mass;
+        
+        // Player impact on ship should be negligible due to mass difference
+        const impactForce = {
+            x: (normalizedImpact.x * shipSpeed * shipBody.mass * 0.001) + (shipVelocity.x * 0.8),
+            y: (normalizedImpact.y * shipSpeed * shipBody.mass * 0.001) + (shipVelocity.y * 0.8)
+        };
+        
+        // Apply the force to player, but apply minimal counter-force to ship
+        const playerForce = {
+            x: impactForce.x,
+            y: impactForce.y
+        };
+        
+        // Apply extremely reduced counter-force to ship (based on mass ratio)
+        // This prevents player from moving the ship
+        const shipForce = {
+            x: -impactForce.x * massRatio * 0.01, // Further reduce by factor of 100
+            y: -impactForce.y * massRatio * 0.01  // Further reduce by factor of 100
+        };
+        
+        // Get player and ship references
+        const player = playerBody.plugin?.player || this.getPlayerFromBody(playerBody);
+        const ship = shipBody.plugin?.ship;
+        
+        if (player) {
+            player.applyImpactForce(playerForce);
+        }
+        
+        // Only apply negligible counter-force to ship if the collision is significant
+        if (ship && shipSpeed > 1.0) {
+            console.log('[Collision] Player impact on ship is negligible due to mass ratio:', {
+                playerMass: playerBody.mass,
+                shipMass: shipBody.mass,
+                massRatio: massRatio,
+                shipForce: {
+                    x: shipForce.x.toFixed(6),
+                    y: shipForce.y.toFixed(6)
+                }
+            });
+            // The force is so small it effectively does nothing to the ship
+            // We could apply it if needed, but with proper mass ratio it should be negligible
+        }
+    }
+    
+    // Helper to get player instance from a body
+    getPlayerFromBody(body) {
+        if (body.label?.startsWith('player')) {
+            // Try to find player from ID
+            const playerId = body.label.split('_')[1];
+            if (playerId === this.currentPlayerId && this.currentPlayer) {
+                return this.currentPlayer;
+            }
+        }
+        return null;
     }
 
     updateRecentCollisions(bodyA, bodyB) {
