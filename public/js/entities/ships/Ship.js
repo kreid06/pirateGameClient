@@ -33,6 +33,10 @@ export class Ship {
             maxSpeed: 4,        // Increased max speed
             sailMultiplier: 1.0 // Full sail effect
         };
+
+        // Add player tracking
+        this.boardedPlayers = new Map();
+        this.previousPosition = { x, y };
     }
     
     // ...existing ship methods...
@@ -101,6 +105,47 @@ export class Ship {
                     module.updateOpenness(this.sailState.currentOpenness);
                 }
             });
+        }
+
+        // SINGLE UNIFIED PLAYER MOVEMENT LOGIC
+        if (this.physicsBody) {
+            const currentPos = this.physicsBody.position;
+            
+            // Calculate ship movement delta from previous position
+            const deltaX = currentPos.x - this.previousPosition.x;
+            const deltaY = currentPos.y - this.previousPosition.y;
+            
+            // Only process if there was meaningful movement (using smaller threshold)
+            if (Math.abs(deltaX) > 0.0001 || Math.abs(deltaY) > 0.0001) {
+                // Move all boarded players with the ship
+                this.boardedPlayers.forEach((player, id) => {
+                    if (player && player.physicsBody) {
+                        // Get current player position - which includes their own movements
+                        const currentPlayerPos = player.physicsBody.position;
+                        
+                        // Apply exact ship movement delta, preserving player's relative position
+                        const newPos = {
+                            x: currentPlayerPos.x + deltaX,
+                            y: currentPlayerPos.y + deltaY
+                        };
+                        
+                        Body.setPosition(player.physicsBody, newPos);
+                        player.position = { ...newPos };
+                        
+                        console.log('[Ship] Synchronized player position:', {
+                            playerId: id,
+                            shipDelta: { x: deltaX.toFixed(5), y: deltaY.toFixed(5) },
+                            newPos: { x: newPos.x.toFixed(1), y: newPos.y.toFixed(1) }
+                        });
+                    }
+                });
+            }
+            
+            // Update ship position properties
+            this.position.x = currentPos.x;
+            this.position.y = currentPos.y;
+            this.rotation = this.physicsBody.angle;
+            this.previousPosition = { x: currentPos.x, y: currentPos.y };
         }
     }
 
@@ -458,6 +503,53 @@ export class Ship {
             }
         });
     }
+
+    // Enhanced player management with logging
+    addBoardedPlayer(player) {
+        const isNewPlayer = !this.boardedPlayers.has(player.id);
+        
+        if (isNewPlayer) {
+            console.log('[Ship] PLAYER BOARDING EVENT:', {
+                event: 'PLAYER_BOARDED',
+                shipId: this.id,
+                playerId: player.id,
+                playerPosition: {
+                    x: player.position.x.toFixed(1),
+                    y: player.position.y.toFixed(1)
+                },
+                shipPosition: {
+                    x: this.position.x.toFixed(1),
+                    y: this.position.y.toFixed(1)
+                },
+                shipVelocity: this.physicsBody ? {
+                    x: this.physicsBody.velocity.x.toFixed(3),
+                    y: this.physicsBody.velocity.y.toFixed(3),
+                    speed: Math.hypot(
+                        this.physicsBody.velocity.x,
+                        this.physicsBody.velocity.y
+                    ).toFixed(3)
+                } : 'no physics body',
+                totalPlayers: this.boardedPlayers.size + 1,
+                timestamp: Date.now()
+            });
+        }
+        
+        this.boardedPlayers.set(player.id, player);
+    }
+
+    removeBoardedPlayer(playerId) {
+        const wasPresent = this.boardedPlayers.has(playerId);
+        this.boardedPlayers.delete(playerId);
+        
+        if (wasPresent) {
+            console.log('[Ship] Removed boarded player:', {
+                shipId: this.id,
+                playerId: playerId,
+                remainingPlayers: this.boardedPlayers.size,
+                timestamp: Date.now()
+            });
+        }
+    }
 }
 
 export class Brigantine extends Ship {
@@ -598,5 +690,10 @@ export class Brigantine extends Ship {
                 module.update(deltaTime);
             }
         });
+
+        // Call parent update to handle player movement
+        super.update(deltaTime);
+        
+        // Additional Brigantine-specific updates can go here
     }
 }

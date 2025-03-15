@@ -121,27 +121,37 @@ export class Player {
     }
 
     applyMovementForce(input) {
+        // Allow movement even when boarded, but don't move if specifically mounted to a module
+        if (this.state.mountedModule) {
+            console.log('[Player] Movement blocked - player is using a module');
+            return;
+        }
+
         if (!this.physicsBody) return;
 
+        // Rest of existing movement code
         const force = { x: 0, y: 0 };
         const { forward, backward, strafe } = this.physics.movement;
+        
+        // When boarded, use a reduced movement multiplier to make movement feel appropriate
+        const movementMultiplier = this.state.isBoarded ? 0.5 : 1.0;
 
         if (input.forward || input.backward || input.strafeLeft || input.strafeRight) {
             if (input.forward) {
-                force.x += Math.cos(this.rotation) * this.physics.maxForce * forward;
-                force.y += Math.sin(this.rotation) * this.physics.maxForce * forward;
+                force.x += Math.cos(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
+                force.y += Math.sin(this.rotation) * this.physics.maxForce * forward * movementMultiplier;
             }
             if (input.backward) {
-                force.x -= Math.cos(this.rotation) * this.physics.maxForce * backward;
-                force.y -= Math.sin(this.rotation) * this.physics.maxForce * backward;
+                force.x -= Math.cos(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
+                force.y -= Math.sin(this.rotation) * this.physics.maxForce * backward * movementMultiplier;
             }
             if (input.strafeLeft) {
-                force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe;
-                force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe;
+                force.x -= Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+                force.y -= Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
             }
             if (input.strafeRight) {
-                force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe;
-                force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe;
+                force.x += Math.cos(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
+                force.y += Math.sin(this.rotation + Math.PI/2) * this.physics.maxForce * strafe * movementMultiplier;
             }
 
             this.applyForce(force);
@@ -648,6 +658,12 @@ export class Player {
         this.state.boardedShipId = shipId;
         this.state.lastShipDetection = Date.now();
         this.setCollisionCategory('BOARDED_PLAYER');
+
+        // Add player to ship's boarded players list
+        const ship = this.getShipById(shipId);
+        if (ship) {
+            ship.addBoardedPlayer(this);
+        }
     }
 
     unboardShip(reason) {
@@ -764,7 +780,7 @@ export class Player {
     }
 
     handleInput(input) {
-        // Only apply movement forces if not mounted to steering wheel
+        // Allow movement when boarded, but not when mounted to a module
         if (!this.state.mountedModule || 
             this.state.mountedModule.constructor.name !== 'SteeringWheel') {
             this.applyMovementForce(input);

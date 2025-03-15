@@ -276,15 +276,15 @@ export class PhysicsManager {
                         force
                     );
 
-                    console.log('[Physics] Applied wind force:', {
-                        shipId: ship.id,
-                        force: {
-                            magnitude: windForce,
-                            x: force.x,
-                            y: force.y
-                        },
-                        speed: Math.hypot(body.velocity.x, body.velocity.y)
-                    });
+                    // console.log('[Physics] Applied wind force:', {
+                    //     shipId: ship.id,
+                    //     force: {
+                    //         magnitude: windForce,
+                    //         x: force.x,
+                    //         y: force.y
+                    //     },
+                    //     speed: Math.hypot(body.velocity.x, body.velocity.y)
+                    // });
                 }
             }
         });
